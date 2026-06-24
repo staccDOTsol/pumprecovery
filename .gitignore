@@ -44,3 +44,24 @@ cache/
 !/secret.json
 
 # Do not ignore the json files or private keys
+
+# Additional heavy artifacts (models, large data blobs)
+**/.locks/
+**/models--*/
+**/*.safetensors
+**/*.bin
+**/*-lock.json
+**/*.gguf
+**/snapshots/
+
+# The giant historical data JSONs are kept locally in top-json/ but intentionally not committed to git
+top-json/mainnet.json
+top-json/three_days.json
+top-json/today.json
+top-json/yesterday.json
+
+# Explicit allow for desired small top level json (override any prior)
+!top-json/7i.json
+!top-json/dummy2.json
+!top-json/package.json
+!top-json/package-lock.json
