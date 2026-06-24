@@ -1,0 +1,46 @@
+# Common build / dependency noise
+node_modules/
+target/
+dist/
+build/
+.next/
+out/
+**/.rlib
+**/.o
+**/.d
+**/.so
+**/.dylib
+**/.wasm
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs / temp
+*.log
+*.tmp
+tmp/
+cache/
+
+# Large / vendored libs that bloat (additive for these projects)
+**/charting_library/
+**/*-standalone.js
+**/*.data
+**/public/tradingview/**
+
+# Keep the important stuff (json + keys)
+!keys/**/*
+!top-json/**/*.json
+!top-json/*.json
+!solana-config/id.json
+!/*.json
+!/id.json
+!/key.json
+!/wallet.json
+!/secret.json
+
+# Do not ignore the json files or private keys
