@@ -38,16 +38,15 @@ export function Wallet() {
   const { loginToken, login, loginLoading, user } = useProfile();
   const { solBalance } = useSolBalance(publicKey?.toBase58());
 
+  // Only show "sign in required" state inside the menu.
+  // Do NOT auto-call login() on wallet connect/switch — that causes
+  // repeated sign prompts when the user switches wallets.
   const requiresLogin = Boolean(publicKey && !loginToken);
-
-  useEffect(() => {
-    if (requiresLogin) login();
-  }, [requiresLogin]);
 
   return (
     <Dialog
-      open={isOpen || requiresLogin}
-      onOpenChange={(v) => !requiresLogin && setIsOpen(v)}
+      open={isOpen}
+      onOpenChange={setIsOpen}
     >
       <DialogTrigger asChild>
         {publicKey ? (
@@ -84,7 +83,7 @@ export function Wallet() {
             if (requiresLogin) {
               return (
                 <div className="grid gap-4 justify-items-center">
-                  <div>Sign in to stacc</div>
+                  <div>Sign in with this wallet to interact</div>
 
                   {loginLoading ? (
                     <div className="flex gap-4 py-2 px-4 border border-white rounded-full w-fit">
@@ -99,6 +98,13 @@ export function Wallet() {
                       Sign message
                     </Button>
                   )}
+
+                  <div
+                    className="text-xs text-slate-400 hover:text-slate-50 cursor-pointer"
+                    onClick={() => setIsOpen(false)}
+                  >
+                    [use without signing in]
+                  </div>
                 </div>
               );
             }

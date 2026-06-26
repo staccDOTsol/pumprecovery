@@ -17,15 +17,27 @@ export const useUserReplies = ({
     setLoading(true);
 
     try {
-      const replies = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies/user-replies/${address}?limit=${limit}&offset=${offset}`
-      ).then((r) => r.json());
+      );
+      if (!res.ok) {
+        setReplies([]);
+        return;
+      }
+      let replies: any = [];
+      try {
+        replies = await res.json();
+      } catch (jsonErr) {
+        console.warn('failed to parse replies json', jsonErr);
+        replies = [];
+      }
 
       if (!replies?.length) return;
 
       setReplies(replies);
     } catch (e) {
       console.error("failed to fetch replies", e);
+      setReplies([]);
     } finally {
       setLoading(false);
     }

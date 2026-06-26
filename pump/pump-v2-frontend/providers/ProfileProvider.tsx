@@ -36,6 +36,7 @@ export const ProfileProvider = ({
 
   const login = async () => {
     if (!signMessage || !publicKey) throw Error("Wallet not connected");
+    if (loginLoading) return;
 
     setLoginLoading(true);
 
@@ -47,8 +48,7 @@ export const ProfileProvider = ({
         await signMessage(new TextEncoder().encode(message))
       );
 
-      // make a post request to auth/login with the publickey, signature, and timestamp
-      const { access_token } = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/auth/login`,
         {
           method: "POST",
@@ -61,8 +61,14 @@ export const ProfileProvider = ({
             timestamp,
           }),
         }
-      ).then((r) => r.json());
+      );
 
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Login failed: ${res.status} ${text.slice(0, 200)}`);
+      }
+
+      const { access_token } = await res.json();
       setLoginToken(access_token);
     } catch (e: any) {
       if (e?.name === 'WalletSignMessageError' || e?.message?.includes('rejected')) {

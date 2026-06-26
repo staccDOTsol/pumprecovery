@@ -15,6 +15,7 @@ import { Coin, useCoins } from "@/hooks/useCoins";
 import { TwitterUser } from "@/components/TwitterUser";
 import { Input } from "@/components/ui/input";
 import { KingOfTheHill } from "@/components/KingOfTheHill";
+import { GlobalStats } from "@/components/GlobalStats";
 import { useTradeUpdates } from "@/hooks/useTradeUpdates";
 import { useIpfsPrefix } from "@/providers/IpfsPrefixProvider";
 import { useLocalStorage } from "usehooks-ts";
@@ -146,17 +147,20 @@ export default function Discover() {
   }, [latestTrade, sort, order, searchTerm, page, showAnimations]);
 
   return (
-    <div className="grid h-screen md:gap-12 gap-4">
-      <div className="flex flex-col items-center w-full mt-8">
+    <div className="grid md:gap-12 gap-4">
+      <div className="flex flex-col items-center w-full mt-8 gap-4">
         <Button
           variant="ghost"
           asChild
-          className="mb-4 text-2xl text-slate-50 hover:font-bold hover:bg-transparent hover:text-slate-50"
+          className="text-2xl text-slate-50 hover:font-bold hover:bg-transparent hover:text-slate-50"
         >
           <Link href="/create">[start a new coin]</Link>
         </Button>
 
-        <KingOfTheHill />
+        <div className="flex flex-col lg:flex-row gap-4 items-center lg:items-start justify-center w-full px-2">
+          <KingOfTheHill />
+          <GlobalStats />
+        </div>
       </div>
 
       <div className="w-full grid justify-items-center px-2 sm:p-0">

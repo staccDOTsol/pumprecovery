@@ -186,47 +186,59 @@ const toastTransaction = async ({...props}: Toast) => {
     process.env.NEXT_PUBLIC_SOLANA_API_URL3 as string,
   ].filter((v) => v);
 
-  const transactionPromise = new Promise((resolve, reject) => {
-    URLS.map(async url => {
-      const connection = new Connection(url, "processed");
-      const latestBlockHash = await connection.getLatestBlockhash("finalized");
+  // Poll getSignatureStatuses (NOT confirmTransaction's blockheight strategy).
+  // The blockheight strategy compares a FRESH blockhash's lastValidBlockHeight to
+  // the OLD signature and spuriously throws TransactionExpiredBlockheightExceeded
+  // even for a landed tx — which previously surfaced as a false "Could not submit"
+  // on a bundle that actually succeeded. Polling the signature status can only
+  // report the true on-chain outcome and never falsely expires.
+  const sig = props.signature as string;
+  const connections = URLS.map((url) => new Connection(url, "confirmed"));
 
-      connection.confirmTransaction({
-        blockhash: latestBlockHash.blockhash,
-        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-        signature: props.signature as string,
-      }, "processed").then((v: any) => {
-        if (v.value.err) {
-          update({...props, status: "error", id: ""});
-        } else {
-          update({...props, status: "success", id: ""});
+  const transactionPromise = new Promise((resolve) => {
+    let settled = false;
+    const finish = (status: "success" | "error") => {
+      if (settled) return;
+      settled = true;
+      update({ ...props, status, id: "" });
+      resolve(sig);
+    };
+
+    const POLL_MS = 1_500;
+    const MAX_MS = 90_000;
+    const start = Date.now();
+
+    const tick = async () => {
+      if (settled) return;
+      for (const connection of connections) {
+        try {
+          const st = await connection.getSignatureStatuses([sig]);
+          const s = st?.value?.[0];
+          if (s) {
+            if (s.err) return finish("error");
+            if (
+              s.confirmationStatus === "confirmed" ||
+              s.confirmationStatus === "finalized"
+            ) {
+              return finish("success");
+            }
+          }
+        } catch {
+          /* transient RPC error — keep polling */
         }
-
-        resolve(props.signature);
-      }).catch(e => {
-        console.error(props, props.signature, e);
-        update({...props, status: "error", id: ""});
-        reject(e);
-      })
-
-      connection.confirmTransaction({
-        blockhash: latestBlockHash.blockhash,
-        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-        signature: props.signature as string,
-      }, "confirmed").then((v: any) => {
-        if (v.value.err) {
-          update({...props, status: "error", id: ""});
-        } else {
-          update({...props, status: "success", id: ""});
+      }
+      if (Date.now() - start >= MAX_MS) {
+        // Timed out waiting; leave it pending rather than falsely failing a
+        // trade that may still be landing. Resolve without flipping to error.
+        if (!settled) {
+          settled = true;
+          resolve(sig);
         }
-
-        resolve(props.signature);
-      }).catch(e => {
-        console.error(props, props.signature, e);
-        update({...props, status: "error", id: ""});
-        reject(e);
-      })
-    })
+        return;
+      }
+      setTimeout(tick, POLL_MS);
+    };
+    tick();
   });
 
   return transactionPromise;

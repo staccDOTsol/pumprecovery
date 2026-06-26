@@ -20,7 +20,7 @@ export class CommentsService {
   }
 
   async handleUpdateComment(event: TradeEvent, signature: string) {
-    if (event.solAmount.lt(new BN(5000000))) return;
+    if (event.solAmount.lt(new BN(1000))) return; // lowered to allow small trades to update comments/activity (was 5M)
 
     const comment = await this.databaseService.getComment(signature);
 

@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import Info from "@/components/Info";
 import TradeBox from "@/components/TradeBox";
+import { BondingProgress } from "@/components/BondingProgress";
+import { OrcaPoolStats } from "@/components/OrcaPoolStats";
+import { CoinFlywheel } from "@/components/CoinFlywheel";
 import Transactions from "@/components/Transactions";
 import Chart from "@/components/Chart/Chart";
 import { Button } from "@/components/ui/button";
@@ -37,6 +40,7 @@ export default function Trade({
     bondingCurve,
     solPrice,
     getFinalVirtualSolReserves,
+    global,
   } = useBondingCurve(coin);
   const [selectedTab, setSelectedTab] = useState("trade");
   const { address, loginToken } = useProfile();
@@ -180,6 +184,7 @@ export default function Trade({
                   widthScale={0.99}
                   symbol={coin.symbol}
                   coin={coin}
+                  solPrice={solPrice}
                 />
               </div>
 
@@ -236,6 +241,18 @@ export default function Trade({
                 />
               )}
 
+              {!coin.raydium_pool && (
+                <>
+                  <BondingProgress
+                    bondingCurve={bondingCurve}
+                    global={global}
+                    solPrice={solPrice}
+                  />
+                  <OrcaPoolStats mint={coin.mint} />
+                  <CoinFlywheel mint={coin.mint} />
+                </>
+              )}
+
               {/* <Comments mintId={coin.mint} /> */}
 
               <Info coin={coin} />
@@ -276,6 +293,7 @@ export default function Trade({
                 widthScale={0.95}
                 symbol={coin.symbol}
                 coin={coin}
+                solPrice={solPrice}
               />
             </div>
           )}
@@ -337,6 +355,18 @@ export default function Trade({
                   logo="/placeholder.svg?height=40&width=40"
                   description="much doge much wow, 1 doge = 1 doge. doge good. doge stronk."
                 />
+              )}
+
+              {!coin.raydium_pool && (
+                <>
+                  <BondingProgress
+                    bondingCurve={bondingCurve}
+                    global={global}
+                    solPrice={solPrice}
+                  />
+                  <OrcaPoolStats mint={coin.mint} />
+                  <CoinFlywheel mint={coin.mint} />
+                </>
               )}
 
               <div className="flex gap-2">

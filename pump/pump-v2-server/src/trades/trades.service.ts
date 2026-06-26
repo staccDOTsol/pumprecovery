@@ -21,7 +21,7 @@ export class TradesService {
   ) {}
 
   async handleTradeCreatedEvent(trade: TradeEvent, signature: string) {
-    if (trade.solAmount.lt(new BN(5000000))) return;
+    if (trade.solAmount.lt(new BN(1000))) return; // lowered to match candlesticks for small trades (was 5M lamports)
 
     console.log(
       `Creating trade: ${
