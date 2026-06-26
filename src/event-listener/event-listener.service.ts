@@ -83,7 +83,7 @@ export class EventListenerService {
 
     const eventParser = new EventParser(
       new PublicKey(this.configService.get('pumpProgramId') as string),
-      new BorshCoder(pumpIdl as Idl),
+      new BorshCoder(pumpIdl as unknown as Idl),
     );
 
     const events = eventParser.parseLogs(tx.meta.logMessages);
@@ -105,7 +105,7 @@ export class EventListenerService {
     const connection = new Connection(this.configService.get('solanaRpcUrl3'));
     const anchorProvider = new AnchorProvider(connection, null, {});
     const pumpProgram = new Program(
-      pumpIdl as Idl,
+      pumpIdl as unknown as Idl,
       new PublicKey(this.configService.get('pumpProgramId') as string),
       anchorProvider,
     );

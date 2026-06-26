@@ -107,16 +107,6 @@
           "isSigner": false
         },
         {
-          "name": "mplTokenMetadata",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
-          "name": "metadata",
-          "isMut": true,
-          "isSigner": false
-        },
-        {
           "name": "user",
           "isMut": true,
           "isSigner": true
@@ -450,52 +440,37 @@
       ]
     },
     {
-      "name": "TradeEvent",
+      "name": "BuyEvent",
       "fields": [
         {
-          "name": "mint",
+          "name": "user",
           "type": "publicKey",
           "index": false
         },
         {
-          "name": "solAmount",
+          "name": "amount",
           "type": "u64",
           "index": false
         },
         {
-          "name": "tokenAmount",
+          "name": "solCost",
           "type": "u64",
           "index": false
         },
         {
-          "name": "isBuy",
+          "name": "fee",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "complete",
           "type": "bool",
           "index": false
-        },
-        {
-          "name": "user",
-          "type": "publicKey",
-          "index": false
-        },
-        {
-          "name": "timestamp",
-          "type": "i64",
-          "index": false
-        },
-        {
-          "name": "virtualSolReserves",
-          "type": "u64",
-          "index": false
-        },
-        {
-          "name": "virtualTokenReserves",
-          "type": "u64",
-          "index": false
         }
       ]
     },
     {
-      "name": "CompleteEvent",
+      "name": "SellEvent",
       "fields": [
         {
           "name": "user",
@@ -503,52 +478,17 @@
           "index": false
         },
         {
-          "name": "mint",
-          "type": "publicKey",
-          "index": false
-        },
-        {
-          "name": "bondingCurve",
-          "type": "publicKey",
-          "index": false
-        },
-        {
-          "name": "timestamp",
-          "type": "i64",
-          "index": false
-        }
-      ]
-    },
-    {
-      "name": "SetParamsEvent",
-      "fields": [
-        {
-          "name": "feeRecipient",
-          "type": "publicKey",
-          "index": false
-        },
-        {
-          "name": "initialVirtualTokenReserves",
+          "name": "amount",
           "type": "u64",
           "index": false
         },
         {
-          "name": "initialVirtualSolReserves",
+          "name": "solOutput",
           "type": "u64",
           "index": false
         },
         {
-          "name": "initialRealTokenReserves",
-          "type": "u64",
-          "index": false
-        },
-        {
-          "name": "tokenTotalSupply",
-          "type": "u64",
-          "index": false
-        },
-        {
-          "name": "feeBasisPoints",
+          "name": "fee",
           "type": "u64",
           "index": false
         }
@@ -596,5 +536,8 @@
       "name": "NotInitialized",
       "msg": "The program is not initialized."
     }
-  ]
+  ],
+  "metadata": {
+    "address": "67LWrtDBPyZqS7SzCYZWBLgPBqZAG94GTfMWEBG2fnuV"
+  }
 }
