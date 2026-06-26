@@ -3,7 +3,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, AccountInfo } from "@solana/web3.js";
 import {
   AccountLayout,
-  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import BN from "bn.js";
@@ -23,7 +23,9 @@ export const useTokenBalance = (mintAddress?: string, address?: string) => {
     // Find the associated token account for the owner address
     const associatedAddress = await getAssociatedTokenAddress(
       mintPublicKey,
-      ownerPublicKey
+      ownerPublicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID
     );
 
     setAssociatedAddress(associatedAddress);

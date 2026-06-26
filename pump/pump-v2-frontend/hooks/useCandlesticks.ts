@@ -35,13 +35,13 @@ export const useCandlesticks = (mint: string, tf: string | number) => {
     // Fetch the candlestick data from the API
     try {
       const response = await fetch(apiUrl);
-      const data = await response.json();
-
-      // Update state with the fetched candlestick data
+      if (!response.ok) throw new Error('bad response');
+      let data = await response.json();
+      if (!Array.isArray(data)) data = [];
       setCandlesticks(data);
     } catch (error) {
       console.error("Failed to fetch candlesticks:", error);
-      // Handle errors (e.g., network issues, invalid responses) here
+      setCandlesticks([]);
     }
 
     setLoading(false);

@@ -238,7 +238,7 @@ export class CoinsService {
   }
 
   async updateKingOfHillStatus(tradeEvent: TradeEvent) {
-    if (tradeEvent.solAmount.lt(new BN(5000000))) return;
+    if (tradeEvent.solAmount.lt(new BN(5000000))) return; // keep higher threshold for king (significant trades only)
 
     console.log('updating king of hill', tradeEvent);
 
@@ -265,7 +265,7 @@ export class CoinsService {
   }
 
   async updateCoinLastTradeTimestamp(tradeEvent: TradeEvent) {
-    if (tradeEvent.solAmount.lt(new BN(5000000))) return;
+    if (tradeEvent.solAmount.lt(new BN(1000))) return; // lowered for small trades (was 5M)
 
     console.log('updating', tradeEvent.mint.toBase58());
     const coin = await this.databaseService.getCoinRaw(

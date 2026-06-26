@@ -22,7 +22,10 @@ interface ChartProps {
   widthScale: number;
   symbol: string;
   coin: Coin;
+  solPrice?: number;
 }
+
+const TOTAL_SUPPLY = 1_000_000_000; // pump-style fixed supply (token count)
 
 const Chart: React.FC<ChartProps> = ({
   candlesticks,
@@ -30,8 +33,18 @@ const Chart: React.FC<ChartProps> = ({
   widthScale = 1,
   symbol,
   coin,
+  solPrice = 0,
 }) => {
   const [timeframe, setTimeframe] = useState("5");
+  // Default to USD market cap (mcap = price/token * total supply * SOL price).
+  const [priceMode, setPriceMode] = useState<"mcap" | "price">("mcap");
+  const [chartSolPrice, setChartSolPrice] = useState(0);
+  useEffect(() => {
+    // Capture SOL price once so the chart doesn't re-init on every price tick.
+    if (solPrice && !chartSolPrice) setChartSolPrice(solPrice);
+  }, [solPrice, chartSolPrice]);
+  const valueMultiplier =
+    priceMode === "mcap" && chartSolPrice ? TOTAL_SUPPLY * chartSolPrice : 1;
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const [isTVScriptLoaded, setTVScriptLoaded] = useState(false);
@@ -182,7 +195,11 @@ const Chart: React.FC<ChartProps> = ({
               minmov: 1,
               has_intraday: true,
               supported_resolutions: ["1S", "5", "15"],
-              pricescale: 10000000000,
+              // Tie precision to the actual value magnitude: mcap (multiplier > 1)
+              // shows 2 decimals; raw SOL price needs ~10 decimals. Keying off
+              // priceMode alone breaks when solPrice hasn't loaded yet (multiplier
+              // is still 1 → raw prices rendered at 2 decimals → flat 0.00).
+              pricescale: valueMultiplier > 1 ? 100 : 10000000000,
             };
 
             onSymbolResolvedCallback(symbolInfo);
@@ -233,29 +250,37 @@ const Chart: React.FC<ChartProps> = ({
                 return;
               }
 
-              const filteredBars = data
-                .filter((candlestick: any) => {
-                  if (!candlestick || typeof candlestick.timestamp !== 'number') return false;
-                  const candleTime = candlestick.timestamp * 1000;
-                  return (
-                    candleTime >= periodParams.from * 1000 &&
-                    candleTime <= periodParams.to * 1000
-                  );
-                })
-                .map((candlestick: any) => ({
-                  time: candlestick.timestamp * 1000,
-                  low: candlestick.low,
-                  high: candlestick.high,
-                  open: candlestick.open,
-                  close: candlestick.close,
-                  volume: candlestick.volume,
-                }));
-              console.log("getBars filtered:", filteredBars.length);
-              if (filteredBars.length > 0) {
-                onHistoryCallback(filteredBars, { noData: false });
-              } else {
+              // Return the FULL available history for this resolution on the
+              // first request (sorted ascending, de-duped). Filtering to
+              // [from,to] made 1S paint almost nothing — TradingView's initial
+              // 1S window is only minutes wide, so the sparse 1S candles (one
+              // per trade-second) mostly fell outside it, while 5m's wide window
+              // caught everything. With the full set loaded, 1S shows the most
+              // bars (finest granularity) and the user can zoom freely.
+              const sorted = data
+                .filter(
+                  (c: any) => c && typeof c.timestamp === "number"
+                )
+                .map((c: any) => ({
+                  time: c.timestamp * 1000,
+                  low: c.low * valueMultiplier,
+                  high: c.high * valueMultiplier,
+                  open: c.open * valueMultiplier,
+                  close: c.close * valueMultiplier,
+                  volume: c.volume,
+                }))
+                .sort((a: any, b: any) => a.time - b.time);
+              // TradingView requires strictly-increasing times — drop dup buckets.
+              const bars = sorted.filter(
+                (b: any, i: number) => i === 0 || b.time !== sorted[i - 1].time
+              );
+
+              if (!periodParams.firstDataRequest) {
+                // Full history already returned on the first request.
                 onHistoryCallback([], { noData: true });
+                return;
               }
+              onHistoryCallback(bars, { noData: bars.length === 0 });
             })();
           },
           subscribeBars: (
@@ -270,7 +295,7 @@ const Chart: React.FC<ChartProps> = ({
               // Assuming you have access to the `onRealtimeCallback` function here,
               // you can format the newTrade into the candle format expected by ChartingView
               // and then call `onRealtimeCallback` to update the chart.
-              const oldCandle = candlesticks[candlesticks.length - 1];
+              const oldCandle = (candlesticks && candlesticks.length > 0) ? candlesticks[candlesticks.length - 1] : null;
               setOldCandle(oldCandle);
               console.log(oldCandle);
               if (oldCandle != undefined) {
@@ -303,7 +328,15 @@ const Chart: React.FC<ChartProps> = ({
                     clearInterval(interval);
                   }
                 }, 100);
-                onRealtimeCallback(newCandle);
+                if (newCandle) {
+                  onRealtimeCallback({
+                    ...newCandle,
+                    open: newCandle.open * valueMultiplier,
+                    high: newCandle.high * valueMultiplier,
+                    low: newCandle.low * valueMultiplier,
+                    close: newCandle.close * valueMultiplier,
+                  });
+                }
               }
             };
 
@@ -337,10 +370,33 @@ const Chart: React.FC<ChartProps> = ({
         chart.remove();
       };
     }
-  }, [isTVScriptLoaded, candlesticks, height, widthScale]);
+  }, [isTVScriptLoaded, candlesticks, height, widthScale, priceMode, valueMultiplier]);
 
   return (
     <div className="grid h-fit gap-2">
+      {showPumpChart && (
+        <div className="flex gap-1 h-fit items-center text-sm">
+          <span className="text-gray-500 mr-1">chart:</span>
+          <div
+            onClick={() => setPriceMode("mcap")}
+            className={clsx(
+              "cursor-pointer px-1 rounded",
+              priceMode === "mcap" ? "bg-green-300 text-black" : "hover:bg-gray-800 text-gray-500"
+            )}
+          >
+            MCap (USD)
+          </div>
+          <div
+            onClick={() => setPriceMode("price")}
+            className={clsx(
+              "cursor-pointer px-1 rounded",
+              priceMode === "price" ? "bg-green-300 text-black" : "hover:bg-gray-800 text-gray-500"
+            )}
+          >
+            Price (SOL)
+          </div>
+        </div>
+      )}
       {coin.raydium_pool && (
         <div className="flex gap-1 h-fit items-center text-white">
           <div

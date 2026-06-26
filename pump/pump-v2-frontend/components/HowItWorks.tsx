@@ -13,7 +13,8 @@ import { Button } from "./ui/button";
 import { useLocalStorage } from "@uidotdev/usehooks";
 
 export function HowItWorks() {
-  const [isOpen, setIsOpen] = useLocalStorage("show-how-it-works", true);
+  // WhyNotPump is the first-load blurb now; HowItWorks opens only via its button
+  const [isOpen, setIsOpen] = useLocalStorage("show-how-it-works", false);
 
   return (
     <Dialog open={isOpen} onOpenChange={(v) => setIsOpen(v)}>

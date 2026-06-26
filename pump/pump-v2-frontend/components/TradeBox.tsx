@@ -26,6 +26,7 @@ import {
 import {
   ComputeBudgetProgram,
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
   Transaction,
@@ -49,9 +50,59 @@ import { useSlippage } from "@/hooks/useSlippage";
 import { Slippage } from "./Slippage";
 import { usePriorityFee } from "@/providers/PriorityFeeProvider";
 import { Thread } from "./Thread";
-import { sendTransaction } from "@/utils/sendTransaction";
+import {
+  sendTransaction,
+  sendJitoBundle,
+  sendBundleSerial,
+  getJitoTipLamports,
+} from "@/utils/sendTransaction";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { useTokenBalance } from "@/hooks/useTokenBalance";
+import {
+  HOUSE_MINT,
+  ORCA_PROGRAM_ID,
+  deriveOrcaPools,
+  deriveReferralRecord,
+  getReferralChainOnchain,
+} from "@/constants/venues";
+import {
+  buildBundleBuyBurnIx,
+  buildCommitIx,
+  getLpPosition,
+  buildAddLiqIx,
+  availableVenues,
+  type Venue,
+} from "@/lib/buyBurn";
+import { humanizeWalletError } from "@/lib/walletError";
+
+// Round-robin venue selector for the optional add_liq leg. A single localStorage
+// counter makes consecutive trades rotate SOL(0)->USDC(1)->HOUSE(2) among ONLY
+// the venues that actually have a pre-opened position for the coin. SSR-safe.
+const ADD_LIQ_ROTATION_KEY = "addLiqVenueRotation";
+function pickNextAddLiqVenue(venues: Venue[]): Venue {
+  if (venues.length <= 1) return venues[0];
+  let counter = 0;
+  try {
+    if (typeof window !== "undefined") {
+      counter =
+        parseInt(window.localStorage.getItem(ADD_LIQ_ROTATION_KEY) || "0", 10) || 0;
+    }
+  } catch {
+    /* ignore */
+  }
+  const venue = venues[counter % venues.length];
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        ADD_LIQ_ROTATION_KEY,
+        String((counter + 1) % 1_000_000)
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+  return venue;
+}
 
 interface TradeProps {
   title: string;
@@ -85,7 +136,7 @@ export default function TradeBox({
   const { pumpProgram } = usePumpProgram();
   const wallet = useAnchorWallet();
   const { connection } = useConnection();
-  const { signTransaction, publicKey } = useWallet();
+  const { signTransaction, signAllTransactions, publicKey } = useWallet();
   const { solBalance } = useSolBalance(publicKey?.toBase58());
   const { tokenBalance, rawTokenBalance } = useTokenBalance(
     coin.mint,
@@ -176,6 +227,14 @@ export default function TradeBox({
         pumpProgram.programId
       )[0];
 
+      // Slot-scoped bundle guard singleton (PDA [b"bundle_guard"]). The new
+      // deployed `buy` requires this as a trailing account; it marks the guard,
+      // escrows the burn third, and WITHHOLDS the buyer's tokens until `commit`.
+      const bundleGuardPDA = PublicKey.findProgramAddressSync(
+        [utils.bytes.utf8.encode("bundle_guard")],
+        pumpProgram.programId
+      )[0];
+
       const associatedUser = getAssociatedTokenAddressSync(
         new PublicKey(coin.mint),
         wallet.publicKey,
@@ -195,14 +254,138 @@ export default function TradeBox({
         associatedUser
       ).catch((e) => null);
 
+      // Per-trade bundle: referral chain + house buy&burn ATA + orca pools.
+      const referralRecord = deriveReferralRecord(
+        wallet.publicKey,
+        pumpProgram.programId
+      );
+      // Resolve the TRUE 3-deep chain: tier-1 from the ref link/localStorage,
+      // tiers 2/3 read from the direct referrer's on-chain referral_record so
+      // they actually pay out (not just the direct referrer).
+      const { referrer, referrer2, referrer3 } = await getReferralChainOnchain(
+        connection,
+        wallet.publicKey,
+        pumpProgram.programId
+      );
+      const userHouseAta = getAssociatedTokenAddressSync(
+        HOUSE_MINT,
+        wallet.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const {
+        orcaSolNewmeme,
+        orcaUsdcNewmeme,
+        orcaHouseNewmeme,
+      } = deriveOrcaPools(new PublicKey(coin.mint));
+
+      // buyInstruction is built LATER (after the slow buildBundleBuyBurnIx) using a
+      // fresh buyQuote() call. This keeps the slippage max/min as close as possible
+      // to the state the wallet simulator (and on-chain) will see, avoiding
+      // "slippage tolerance exceeded" / "Failed to simulate" errors.
+
+      const tipLamports = await getJitoTipLamports();
+      console.log("jito tip for bundle", (tipLamports / 1e9).toFixed(6), "SOL");
+      const instructions: TransactionInstruction[] = [
+        tipAccount
+          ? SystemProgram.transfer({
+              fromPubkey: wallet.publicKey,
+              toPubkey: new PublicKey(tipAccount),
+              lamports: tipLamports,
+            })
+          : null,
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: priorityFee,
+        }),
+        // CU limit: the buy now also runs the introspection allowlist scan
+        // (loads every tx instruction) + escrow/referral, which exceeds the
+        // default 200k -> ProgramFailedToComplete. 400k gives ample headroom.
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        userTokenAccount
+          ? null
+          : createAssociatedTokenAccountIdempotentInstruction(
+              wallet.publicKey,
+              associatedUser,
+              wallet.publicKey,
+              new PublicKey(coin.mint),
+              TOKEN_2022_PROGRAM_ID
+            ),
+        createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey,
+          userHouseAta,
+          wallet.publicKey,
+          HOUSE_MINT,
+          TOKEN_2022_PROGRAM_ID
+        ),
+      ].filter((v) => v !== null) as TransactionInstruction[];
+
+      // --- Atomic same-slot bundle: buy -> bundle_buy_burn -> commit ---
+      // The deployed program REQUIRES the full mask (TRADE|REFERRAL|BURN) before
+      // `commit` will release the buyer's tokens. The new `buy` only WITHHOLDS
+      // them (it marks STEP_TRADE/STEP_REFERRAL + escrows the burn third), so we
+      // MUST also run the buy&burn (STEP_BURN) and commit legs in the SAME tx.
+      //
+      // CRITICAL: these legs are NOT optional. If we cannot assemble them we
+      // FAIL the whole buy rather than send a partial `buy` that would strand
+      // the buyer's tokens — so this is intentionally NOT wrapped in a
+      // try/catch that swallows the error. Any failure bubbles up to the outer
+      // catch and we never sign/send a buy without its commit.
+      const solCostBasis = nativeSelected ? parsedAmount : solRequired;
+      const tradeFee = solCostBasis
+        .mul(global.feeBasisPoints)
+        .div(new BN(10_000));
+      let burnLamports = tradeFee.div(new BN(3));
+
+      // Dust/floor case: the burn third can round down below pump-AMM's minimum.
+      // We can NO LONGER skip the burn leg (the program's REQUIRED_MASK includes
+      // BURN, so `commit` would fail without bundle_buy_burn having run). Instead,
+      // bump the burn third up to a small floor so the bundle still completes.
+      const BURN_FLOOR = new BN(5000);
+      if (burnLamports.lt(BURN_FLOOR)) {
+        burnLamports = BURN_FLOOR;
+      }
+
+      const { setupIxs, buyBurnIx } = await buildBundleBuyBurnIx(
+        connection,
+        wallet.publicKey,
+        burnLamports
+      );
+
+      const commitIx = buildCommitIx(
+        wallet.publicKey,
+        new PublicKey(coin.mint),
+        new PublicKey(coin.bonding_curve),
+        associatedBondingCurve,
+        associatedUser
+      );
+
+      // --- Build the main buy instruction as LATE as possible ---
+      // Recompute tokens + max cost using buyQuote() at this moment (after the
+      // potentially slow buildBundleBuyBurnIx + Orca state fetches). The hook's
+      // bondingCurve is kept fresh by onAccountChange subscription. This makes
+      // the slippage limit match what the simulator sees, fixing "slippage exceeded"
+      // + "Failed to simulate" errors in the wallet preview.
+      const freshTokensToBuy = nativeSelected
+        ? buyQuote(parsedAmount, true)
+        : parsedAmount;
+      let freshMaxSol: BN;
+      if (nativeSelected) {
+        let base = parsedAmount;
+        if (global) {
+          const fee = base.mul(global.feeBasisPoints).div(new BN(10_000));
+          base = base.add(fee);
+        }
+        freshMaxSol = base.add(
+          base.mul(new BN(Math.floor(slippage * 10))).div(new BN(1000))
+        );
+      } else {
+        const base = buyQuote(parsedAmount, false);
+        freshMaxSol = base.add(
+          base.mul(new BN(Math.floor(slippage * 10))).div(new BN(1000))
+        );
+      }
       const buyInstruction = await pumpProgram.methods
-        .buy(
-          tokensToBuy,
-          // new BN(0)
-          solRequired.add(
-            solRequired.mul(new BN(Math.floor(slippage * 10))).div(new BN(1000))
-          )
-        )
+        .buy(freshTokensToBuy, freshMaxSol)
         .accounts({
           feeRecipient: global.feeRecipient,
           global: globalPDA,
@@ -214,49 +397,103 @@ export default function TradeBox({
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_2022_PROGRAM_ID,
           rent: SYSVAR_RENT_PUBKEY,
+          referrer,
+          referrer2,
+          referrer3,
+          referralRecord,
+          houseMint: HOUSE_MINT,
+          userHouseAta,
+          houseTokenProgram: TOKEN_2022_PROGRAM_ID,
+          orcaSolNewmeme,
+          orcaUsdcNewmeme,
+          orcaHouseNewmeme,
+          orcaProgram: ORCA_PROGRAM_ID,
+          bundleGuard: bundleGuardPDA,
+          instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
           ['event_authority']: eventAuthorityPDA,
           program: pumpProgram.programId,
         })
         .instruction();
 
+      // The full playbook (buy -> bundle_buy_burn -> commit) is far too many
+      // accounts to fit in ONE transaction (encoding overruns the 1232-byte
+      // limit), so we ship it as an ATOMIC JITO BUNDLE of separate txs that all
+      // land in the same slot (room to grow the playbook to 5). The on-chain
+      // BundleGuard counter enforces the full required mask landed this slot;
+      // Jito guarantees same-slot + ordering. This is what makes trades
+      // un-sandwichable: a bot must replicate the exact playbook or it won't fly.
+      if (!signAllTransactions) {
+        throw new Error("wallet does not support signAllTransactions (required for the trade bundle)");
+      }
+
+      // Fetch the blockhash *immediately* before building+signing so that the
+      // signed bundle txs carry a very fresh blockhash when they reach Jito.
+      // (Wallet preview + user confirmation time would otherwise age the hash.)
       const recentBlockhash = await connection
-        .getLatestBlockhash("finalized")
+        .getLatestBlockhash("confirmed")
         .then((v) => v.blockhash);
 
-      const tx = new VersionedTransaction(
-        new TransactionMessage({
-          payerKey: publicKey,
-          recentBlockhash,
-          instructions: [
-            tipAccount
-              ? SystemProgram.transfer({
-                  fromPubkey: wallet.publicKey,
-                  toPubkey: new PublicKey(tipAccount),
-                  lamports: Math.max(
-                    Math.floor((priorityFee * 300_000) / 1_000_000),
-                    300000
-                  ),
-                })
-              : null,
-            ComputeBudgetProgram.setComputeUnitPrice({
-              microLamports: priorityFee,
-            }),
-            userTokenAccount
-              ? null
-              : createAssociatedTokenAccountIdempotentInstruction(
-                  wallet.publicKey,
-                  associatedUser,
-                  wallet.publicKey,
-                  new PublicKey(coin.mint),
-                  TOKEN_2022_PROGRAM_ID
-                ),
-            buyInstruction,
-          ].filter((v) => v !== null) as TransactionInstruction[],
-        }).compileToV0Message()
-      );
+      const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: priorityFee,
+      });
+      // Each bundle leg runs the introspection scan; add_liq also does a CU-heavy
+      // Orca increase_liquidity. 400k covers all of them (default 200k is too low).
+      const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: 400_000,
+      });
+      const buildTx = (ixs: TransactionInstruction[]) =>
+        new VersionedTransaction(
+          new TransactionMessage({
+            payerKey: publicKey,
+            recentBlockhash,
+            instructions: ixs,
+          }).compileToV0Message()
+        );
 
-      const signedTx = await signTransaction(tx);
-      const signature = await sendTransaction(signedTx, connection);
+      // tx1: setup + buy (the tip lives here so the bundle is incentivized).
+      const txBuy = buildTx([...instructions, ...setupIxs, buyInstruction]);
+      // tx2 (optional, flag-gated): add_liq — single-sided deposit of the escrowed
+      // LP third into a program-owned Orca position on ONE rotating venue
+      // (SOL->USDC->HOUSE round-robin among venues with a registry position).
+      // Gated by NEXT_PUBLIC_ENABLE_ADD_LIQ + registry; building it can NEVER
+      // break the buy: any error falls back to the 3-leg bundle. When active the
+      // bundle is buy -> add_liq(venue) -> burn -> commit.
+      let txAddLiq: VersionedTransaction | null = null;
+      try {
+        if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
+          const positions = getLpPosition(coin.mint);
+          const venues = positions ? availableVenues(positions) : [];
+          if (positions && venues.length > 0) {
+            const venue = pickNextAddLiqVenue(venues);
+            const addLiqIx = await buildAddLiqIx(
+              connection,
+              wallet.publicKey,
+              positions,
+              venue,
+              burnLamports
+            );
+            // venue 2 (HOUSE) does a PumpSwap buy + Orca deposit -> CU-heavy; 600k.
+            const addLiqCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+              units: venue === 2 ? 600_000 : 400_000,
+            });
+            txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
+          }
+        }
+      } catch (e) {
+        console.warn("add_liq leg skipped (falling back to 3-leg bundle):", e);
+        txAddLiq = null;
+      }
+      // tx3: buy & burn $HOUSE leg.
+      const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
+      // tx4: commit — releases the withheld tokens; MUST be last.
+      const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);
+
+      // Jito bundle: same-slot AND IN-ORDER. Order: buy -> [add_liq] -> burn -> commit.
+      const bundleTxs = (txAddLiq
+        ? [txBuy, txAddLiq, txBuyBurn, txCommit]
+        : [txBuy, txBuyBurn, txCommit]) as VersionedTransaction[];
+      const signedTxs = await signAllTransactions(bundleTxs);
+      const signature = await sendJitoBundle(signedTxs, connection);
 
       if (comment) createComment(comment, signature);
 
@@ -273,7 +510,7 @@ export default function TradeBox({
 
       await toastTransaction({
         title: "Could not submit buy",
-        description: (e as any)?.message,
+        description: humanizeWalletError(e),
         status: "error",
       });
     }
@@ -295,6 +532,11 @@ export default function TradeBox({
         pumpProgram.programId
       )[0];
 
+      const bundleGuardPDA = PublicKey.findProgramAddressSync(
+        [utils.bytes.utf8.encode("bundle_guard")],
+        pumpProgram.programId
+      )[0];
+
       const associatedUser = getAssociatedTokenAddressSync(
         new PublicKey(coin.mint),
         wallet.publicKey,
@@ -312,13 +554,69 @@ export default function TradeBox({
       const amountToSell = parsedAmount;
       const quote = sellQuote(amountToSell);
 
+      // Per-trade bundle: referral chain + house buy&burn ATA + orca pools.
+      const referralRecord = deriveReferralRecord(
+        wallet.publicKey,
+        pumpProgram.programId
+      );
+      // Resolve the TRUE 3-deep chain: tier-1 from the ref link/localStorage,
+      // tiers 2/3 read from the direct referrer's on-chain referral_record so
+      // they actually pay out (not just the direct referrer).
+      const { referrer, referrer2, referrer3 } = await getReferralChainOnchain(
+        connection,
+        wallet.publicKey,
+        pumpProgram.programId
+      );
+      const userHouseAta = getAssociatedTokenAddressSync(
+        HOUSE_MINT,
+        wallet.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const {
+        orcaSolNewmeme,
+        orcaUsdcNewmeme,
+        orcaHouseNewmeme,
+      } = deriveOrcaPools(new PublicKey(coin.mint));
+
+      // sellInstruction + its wrapping instructions[] are built later (after the
+      // slow buildBundleBuyBurnIx) using a fresh sellQuote() call.
+
+      // --- Atomic same-slot Jito bundle: sell -> bundle_buy_burn -> commit ---
+      // The deployed `sell` now withholds the seller's SOL payout + escrows the
+      // burn third, marks STEP_TRADE/STEP_REFERRAL, and `commit` releases the
+      // withheld SOL once the full mask (TRADE|REFERRAL|BURN) lands this slot.
+      // Too many accounts for one tx, so we ship a Jito bundle (same-slot,
+      // atomic). buy&burn is REQUIRED (commit fails without STEP_BURN), so we do
+      // NOT swallow its errors — a failure fails the whole sell.
+      const tradeFee = quote.mul(global.feeBasisPoints).div(new BN(10_000));
+      let burnLamports = tradeFee.div(new BN(3));
+      const BURN_FLOOR = new BN(5000);
+      if (burnLamports.lt(BURN_FLOOR)) burnLamports = BURN_FLOOR;
+
+      const { setupIxs, buyBurnIx } = await buildBundleBuyBurnIx(
+        connection,
+        wallet.publicKey,
+        burnLamports
+      );
+      const commitIx = buildCommitIx(
+        wallet.publicKey,
+        new PublicKey(coin.mint),
+        new PublicKey(coin.bonding_curve),
+        associatedBondingCurve,
+        associatedUser
+      );
+
+      // Build sellInstruction + the instructions list for txSell *late* (after slow
+      // buildBundle...) so we use the freshest sellQuote(). Fixes wallet sim failing
+      // with "slippage exceeded" / "Failed to simulate".
+      const freshAmountToSell = parsedAmount;
+      const freshQuote = sellQuote(freshAmountToSell);
+      const freshMinSolOut = freshQuote.sub(
+        freshQuote.mul(new BN(Math.floor(slippage * 10))).div(new BN(1000))
+      );
       const sellInstruction = await pumpProgram.methods
-        .sell(
-          amountToSell,
-          quote.sub(
-            quote.mul(new BN(Math.floor(slippage * 10))).div(new BN(1000))
-          )
-        )
+        .sell(freshAmountToSell, freshMinSolOut)
         .accounts({
           feeRecipient: global.feeRecipient,
           global: globalPDA,
@@ -330,40 +628,119 @@ export default function TradeBox({
           systemProgram: SystemProgram.programId,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           tokenProgram: TOKEN_2022_PROGRAM_ID,
+          referrer,
+          referrer2,
+          referrer3,
+          referralRecord,
+          houseMint: HOUSE_MINT,
+          userHouseAta,
+          houseTokenProgram: TOKEN_2022_PROGRAM_ID,
+          orcaSolNewmeme,
+          orcaUsdcNewmeme,
+          orcaHouseNewmeme,
+          orcaProgram: ORCA_PROGRAM_ID,
+          bundleGuard: bundleGuardPDA,
+          instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
           ['event_authority']: eventAuthorityPDA,
           program: pumpProgram.programId,
         })
         .instruction();
 
+      const tipLamports = await getJitoTipLamports();
+      console.log("jito tip for bundle", (tipLamports / 1e9).toFixed(6), "SOL");
+      const instructions: TransactionInstruction[] = [
+        tipAccount
+          ? SystemProgram.transfer({
+              fromPubkey: wallet.publicKey,
+              toPubkey: new PublicKey(tipAccount),
+              lamports: tipLamports,
+            })
+          : null,
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: priorityFee,
+        }),
+        // CU limit: sell now runs the introspection scan + escrow/withhold; 400k
+        // headroom over the default 200k to avoid ProgramFailedToComplete.
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey,
+          userHouseAta,
+          wallet.publicKey,
+          HOUSE_MINT,
+          TOKEN_2022_PROGRAM_ID
+        ),
+        sellInstruction,
+      ].filter((v) => v !== null) as TransactionInstruction[];
+
+      if (!signAllTransactions) {
+        throw new Error("wallet does not support signAllTransactions (required for the trade bundle)");
+      }
+
+      // Fresh blockhash right before signing (see buy path for rationale).
       const recentBlockhash = await connection
-        .getLatestBlockhash("finalized")
+        .getLatestBlockhash("confirmed")
         .then((v) => v.blockhash);
 
-      const tx = new VersionedTransaction(
-        new TransactionMessage({
-          payerKey: publicKey,
-          recentBlockhash,
-          instructions: [
-            tipAccount
-              ? SystemProgram.transfer({
-                  fromPubkey: wallet.publicKey,
-                  toPubkey: new PublicKey(tipAccount),
-                  lamports: Math.max(
-                    Math.floor((priorityFee * 300_000) / 1_000_000),
-                    300000
-                  ),
-                })
-              : null,
-            ComputeBudgetProgram.setComputeUnitPrice({
-              microLamports: priorityFee,
-            }),
-            sellInstruction,
-          ].filter((v) => v !== null) as TransactionInstruction[],
-        }).compileToV0Message()
-      );
+      const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: priorityFee,
+      });
+      // Each bundle leg runs the introspection scan; add_liq also does a CU-heavy
+      // Orca increase_liquidity. 400k covers all of them (default 200k is too low).
+      const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: 400_000,
+      });
+      const buildTx = (ixs: TransactionInstruction[]) =>
+        new VersionedTransaction(
+          new TransactionMessage({
+            payerKey: publicKey,
+            recentBlockhash,
+            instructions: ixs,
+          }).compileToV0Message()
+        );
 
-      const signedTx = await signTransaction(tx);
-      const signature = await sendTransaction(signedTx, connection);
+      // `instructions` = [tip?, cuPrice, createHouseATA, sellInstruction]; the
+      // setup ixs (guard/treasury init, normally empty) must run before `sell`.
+      const preSell = instructions.slice(0, instructions.length - 1);
+      const sellIx = instructions[instructions.length - 1];
+      const txSell = buildTx([...preSell, ...setupIxs, sellIx]);
+      // Optional add_liq leg (flag-gated + registry), mirroring buy: sells also
+      // add liquidity (LP-forever applies to both directions), rotating venues
+      // round-robin among those with a registry position. Consumes the LP third
+      // escrowed by `sell`; any build failure falls back to the 3-leg bundle.
+      let txAddLiq: VersionedTransaction | null = null;
+      try {
+        if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
+          const positions = getLpPosition(coin.mint);
+          const venues = positions ? availableVenues(positions) : [];
+          if (positions && venues.length > 0) {
+            const venue = pickNextAddLiqVenue(venues);
+            const addLiqIx = await buildAddLiqIx(
+              connection,
+              wallet.publicKey,
+              positions,
+              venue,
+              burnLamports
+            );
+            // venue 2 (HOUSE) does a PumpSwap buy + Orca deposit -> CU-heavy; 600k.
+            const addLiqCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+              units: venue === 2 ? 600_000 : 400_000,
+            });
+            txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
+          }
+        }
+      } catch (e) {
+        console.warn("add_liq leg skipped (falling back to 3-leg bundle):", e);
+        txAddLiq = null;
+      }
+      const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
+      const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);
+
+      // Jito bundle: same-slot AND in-order. sell -> [add_liq] -> burn -> commit.
+      const bundleTxs = (txAddLiq
+        ? [txSell, txAddLiq, txBuyBurn, txCommit]
+        : [txSell, txBuyBurn, txCommit]) as VersionedTransaction[];
+      const signedTxs = await signAllTransactions(bundleTxs);
+      const signature = await sendJitoBundle(signedTxs, connection);
 
       if (comment) createComment(comment, signature);
 
@@ -379,7 +756,7 @@ export default function TradeBox({
 
       await toastTransaction({
         title: "Could not submit sell",
-        description: (e as any)?.message,
+        description: humanizeWalletError(e),
         status: "error",
       });
     }

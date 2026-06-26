@@ -25,13 +25,18 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   getAccount,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
+import {
+  SYSVAR_RENT_PUBKEY,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+} from "@solana/web3.js";
 import { useToast } from "@/components/ui/use-toast";
 import { Oval } from "react-loader-spinner";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { humanizeWalletError } from "@/lib/walletError";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { DialogTrigger } from "@radix-ui/react-dialog";
@@ -39,7 +44,20 @@ import { Input } from "@/components/ui/input";
 import { lamportsToSol } from "@/utils/lamportsToSol";
 import { useGlobal } from "@/hooks/useGlobal";
 import { usePriorityFee } from "@/providers/PriorityFeeProvider";
-import { sendTransaction } from "@/utils/sendTransaction";
+import {
+  sendTransaction,
+  sendJitoBundle,
+  getJitoTipLamports,
+} from "@/utils/sendTransaction";
+import {
+  HOUSE_MINT,
+  ORCA_PROGRAM_ID,
+  deriveOrcaPools,
+  deriveReferralRecord,
+  getReferralChain,
+} from "@/constants/venues";
+import { buildBundleBuyBurnIx, buildCommitIx } from "@/lib/buyBurn";
+import { openVenuesForNewCoin, ESTIMATED_RENT_SOL } from "@/lib/openVenues";
 
 const CreateButton = ({
   symbol,
@@ -261,6 +279,11 @@ const CreateButton = ({
           </Button>
 
           <div className="text-xs">Cost to deploy: ~0.02 SOL</div>
+          <div className="text-xs text-gray-400">
+            After creating, you&apos;ll be asked to open Orca venues + LP
+            positions for your coin: ~{ESTIMATED_RENT_SOL.toFixed(2)} SOL
+            one-time rent (3 pools + positions), paid by you.
+          </div>
 
           {error && <ErrorMessage>{error}</ErrorMessage>}
 
@@ -281,7 +304,7 @@ export default function Create() {
   const [website, setWebsite] = useState("");
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
-  const { signTransaction, publicKey } = useWallet();
+  const { signTransaction, signAllTransactions, publicKey } = useWallet();
   const { toastTransaction, toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -503,80 +526,264 @@ export default function Create() {
         ),
       });
 
-      // If user chose to buy some at creation, do the buy as a follow-up tx.
-      // This way the create tx always succeeds (the Buy ix was previously causing
-      // the whole tx to revert due to associated_bonding_curve not being seen as
-      // initialized or constraint mismatch in the current program version).
-      if (buyParams.amount.gt(new BN(0))) {
-        const associatedUser = getAssociatedTokenAddressSync(
-          mintKeyPair.publicKey,
-          wallet.publicKey,
-          false,
-          TOKEN_2022_PROGRAM_ID
-        );
-
-        const buyInstruction = await pumpProgram.methods
-          .buy(buyParams.amount, buyParams.solAmount)
-          .accounts({
-            global: globalPDA,
-            feeRecipient: global.feeRecipient,
-            mint: mintKeyPair.publicKey,
-            bondingCurve: bondingCurvePDA,
-            associatedBondingCurve: associatedBondingCurveAccount,
-            associatedUser,
-            user: wallet.publicKey,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_2022_PROGRAM_ID,
-            rent: SYSVAR_RENT_PUBKEY,
-            ['event_authority']: eventAuthorityPDA,
-            program: pumpProgram.programId,
-          })
-          .instruction();
-
-        const buyTxInstructions = [
-          tipAccount
-            ? SystemProgram.transfer({
-                fromPubkey: wallet.publicKey,
-                toPubkey: new PublicKey(tipAccount),
-                lamports: Math.max(
-                  Math.floor((priorityFee * 300_000) / 1_000_000),
-                  300000
-                ),
-              })
-            : null,
-          ComputeBudgetProgram.setComputeUnitPrice({
-            microLamports: priorityFee,
-          }),
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
-          buyInstruction,
-        ].filter((v) => v !== null) as TransactionInstruction[];
-
-        const buyRecent = await connection
-          .getLatestBlockhash("finalized")
-          .then((v) => v.blockhash);
-
-        const buyTx = new VersionedTransaction(
-          new TransactionMessage({
-            payerKey: publicKey,
-            recentBlockhash: buyRecent,
-            instructions: buyTxInstructions,
-          }).compileToV0Message()
-        );
-
-        const signedBuy = await signTransaction(buyTx);
-        const buySignature = await sendTransaction(signedBuy, connection);
-
-        await toastTransaction({
-          title: `initial buy of ${name} [${ticker}]`,
-          signature: buySignature,
+      // --- Open Orca venues + program-owned LP positions for the new coin ---
+      // RESILIENT + NON-BLOCKING: the create tx already confirmed above, so any
+      // failure here leaves the coin fully created. The creator signs these
+      // follow-up txs (one approval) and pays the one-time rent (~0.47 SOL for
+      // the 3 pools + LP positions + Orca tick arrays). For each base the helper
+      // sends init_venues then open_lp_position (they can't share a tx), skips a
+      // base whose pool already exists, and never throws.
+      // Gated: opening all 3 Orca pools + LP positions costs the creator ~0.47 SOL
+      // (Orca tick-array rent). OFF by default so creating a coin stays cheap;
+      // set NEXT_PUBLIC_OPEN_VENUES_ON_CREATE=true to enable instant venues.
+      // (When off, venues get opened later via the authority's grandfather script.)
+      if (process.env.NEXT_PUBLIC_OPEN_VENUES_ON_CREATE !== "true") {
+        console.log("create: venue opening disabled (NEXT_PUBLIC_OPEN_VENUES_ON_CREATE!=true)");
+      } else
+      try {
+        toast({
+          title: "opening venues…",
+          description:
+            "creating Orca pools + program-owned LP positions for your coin (you pay the rent)",
         });
+        const venueResult = await openVenuesForNewCoin({
+          connection,
+          payer: publicKey,
+          mint: mintKeyPair.publicKey,
+          virtualSolReserves: global.initialVirtualSolReserves,
+          virtualTokenReserves: global.initialVirtualTokenReserves,
+          signAllTransactions,
+          signTransaction,
+          priorityFeeMicroLamports: priorityFee,
+          onStatus: (msg, kind) =>
+            toast({
+              title: msg,
+              status:
+                kind === "error"
+                  ? "error"
+                  : kind === "success"
+                  ? "success"
+                  : undefined,
+            }),
+        });
+        if (venueResult.succeeded.length > 0) {
+          toast({
+            title: `venues opened: ${venueResult.succeeded.join(", ")}`,
+            description:
+              "note: per-trade add_liq for this coin activates once the LP registry/indexer is refreshed",
+          });
+        }
+      } catch (venueErr) {
+        // Defensive: openVenuesForNewCoin already swallows its own errors.
+        console.warn(
+          "venue/position setup failed (coin still created)",
+          venueErr
+        );
+      }
+
+      // --- Optional initial buy: FULL atomic 3-leg Jito bundle (mirrors TradeBox) ---
+      // Runs LAST, after create confirms AND venues are opened, so the mint,
+      // bonding_curve, AND the Orca pools the `buy` references all exist (same
+      // shape as a grandfathered coin the trade box buys against). The deployed
+      // `buy` WITHHOLDS the buyer's tokens + escrows the fee thirds and REQUIRES
+      // `bundle_guard` + `instructions_sysvar`, so a lone buy is broken
+      // ("bundleGuard not provided") and useless. We therefore ship the exact
+      // same bundle TradeBox.buy() does: buy -> bundle_buy_burn -> commit.
+      // add_liq is intentionally LEFT OUT (matches TradeBox's
+      // NEXT_PUBLIC_ENABLE_ADD_LIQ gating, currently false). RESILIENT: any
+      // failure here leaves the coin fully created.
+      if (buyParams.amount.gt(new BN(0))) {
+        try {
+          if (!signAllTransactions) {
+            throw new Error(
+              "wallet does not support signAllTransactions (required for the initial-buy bundle)"
+            );
+          }
+
+          // Slot-scoped bundle guard singleton (PDA [b"bundle_guard"]) — the new
+          // deployed `buy` requires it as a trailing account; it marks the guard,
+          // escrows the burn third, and WITHHOLDS the buyer's tokens until `commit`.
+          const bundleGuardPDA = PublicKey.findProgramAddressSync(
+            [utils.bytes.utf8.encode("bundle_guard")],
+            pumpProgram.programId
+          )[0];
+
+          const associatedUser = getAssociatedTokenAddressSync(
+            mintKeyPair.publicKey,
+            wallet.publicKey,
+            false,
+            TOKEN_2022_PROGRAM_ID
+          );
+          const userTokenAccount = await getAccount(
+            connection,
+            associatedUser
+          ).catch(() => null);
+
+          // Per-trade bundle: referral chain + house buy&burn ATA + orca pools.
+          const referralRecord = deriveReferralRecord(
+            wallet.publicKey,
+            pumpProgram.programId
+          );
+          const { referrer, referrer2, referrer3 } = getReferralChain(
+            wallet.publicKey
+          );
+          const userHouseAta = getAssociatedTokenAddressSync(
+            HOUSE_MINT,
+            wallet.publicKey,
+            false,
+            TOKEN_2022_PROGRAM_ID
+          );
+          const {
+            orcaSolNewmeme,
+            orcaUsdcNewmeme,
+            orcaHouseNewmeme,
+          } = deriveOrcaPools(mintKeyPair.publicKey);
+
+          // burnLamports = fee/3 (fee = solAmount * feeBasisPoints / 10000),
+          // floored to a 5000-lamport min — exactly like TradeBox.
+          const tradeFee = buyParams.solAmount
+            .mul(global.feeBasisPoints)
+            .div(new BN(10_000));
+          let burnLamports = tradeFee.div(new BN(3));
+          const BURN_FLOOR = new BN(5000);
+          if (burnLamports.lt(BURN_FLOOR)) burnLamports = BURN_FLOOR;
+
+          const { setupIxs, buyBurnIx } = await buildBundleBuyBurnIx(
+            connection,
+            wallet.publicKey,
+            burnLamports
+          );
+          const commitIx = buildCommitIx(
+            wallet.publicKey,
+            mintKeyPair.publicKey,
+            bondingCurvePDA,
+            associatedBondingCurveAccount,
+            associatedUser
+          );
+
+          const buyInstruction = await pumpProgram.methods
+            .buy(buyParams.amount, buyParams.solAmount)
+            .accounts({
+              global: globalPDA,
+              feeRecipient: global.feeRecipient,
+              mint: mintKeyPair.publicKey,
+              bondingCurve: bondingCurvePDA,
+              associatedBondingCurve: associatedBondingCurveAccount,
+              associatedUser,
+              user: wallet.publicKey,
+              systemProgram: SystemProgram.programId,
+              tokenProgram: TOKEN_2022_PROGRAM_ID,
+              rent: SYSVAR_RENT_PUBKEY,
+              referrer,
+              referrer2,
+              referrer3,
+              referralRecord,
+              houseMint: HOUSE_MINT,
+              userHouseAta,
+              houseTokenProgram: TOKEN_2022_PROGRAM_ID,
+              orcaSolNewmeme,
+              orcaUsdcNewmeme,
+              orcaHouseNewmeme,
+              orcaProgram: ORCA_PROGRAM_ID,
+              bundleGuard: bundleGuardPDA,
+              instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+              ['event_authority']: eventAuthorityPDA,
+              program: pumpProgram.programId,
+            })
+            .instruction();
+
+          const tipLamports = await getJitoTipLamports();
+          const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({
+            microLamports: priorityFee,
+          });
+          // 400k headroom: each leg runs the introspection allowlist scan +
+          // escrow/referral (default 200k -> ProgramFailedToComplete).
+          const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+            units: 400_000,
+          });
+
+          const buyLegIxs = [
+            tipAccount
+              ? SystemProgram.transfer({
+                  fromPubkey: wallet.publicKey,
+                  toPubkey: new PublicKey(tipAccount),
+                  lamports: tipLamports,
+                })
+              : null,
+            cuPriceIx,
+            cuLimitIx,
+            userTokenAccount
+              ? null
+              : createAssociatedTokenAccountIdempotentInstruction(
+                  wallet.publicKey,
+                  associatedUser,
+                  wallet.publicKey,
+                  mintKeyPair.publicKey,
+                  TOKEN_2022_PROGRAM_ID
+                ),
+            createAssociatedTokenAccountIdempotentInstruction(
+              wallet.publicKey,
+              userHouseAta,
+              wallet.publicKey,
+              HOUSE_MINT,
+              TOKEN_2022_PROGRAM_ID
+            ),
+          ].filter((v) => v !== null) as TransactionInstruction[];
+
+          // Fresh blockhash right before signing so the bundle reaches Jito young.
+          const buyRecent = await connection
+            .getLatestBlockhash("confirmed")
+            .then((v) => v.blockhash);
+          const buildBundleTx = (ixs: TransactionInstruction[]) =>
+            new VersionedTransaction(
+              new TransactionMessage({
+                payerKey: publicKey,
+                recentBlockhash: buyRecent,
+                instructions: ixs,
+              }).compileToV0Message()
+            );
+
+          // 3-leg bundle (in order): buy (tip lives here) -> buy&burn -> commit.
+          const txBuy = buildBundleTx([
+            ...buyLegIxs,
+            ...setupIxs,
+            buyInstruction,
+          ]);
+          const txBuyBurn = buildBundleTx([cuPriceIx, cuLimitIx, buyBurnIx]);
+          const txCommit = buildBundleTx([cuPriceIx, cuLimitIx, commitIx]);
+
+          const bundleTxs: VersionedTransaction[] = [
+            txBuy,
+            txBuyBurn,
+            txCommit,
+          ];
+          const signedTxs = await signAllTransactions(bundleTxs);
+          const buySignature = await sendJitoBundle(signedTxs, connection);
+
+          await toastTransaction({
+            title: `initial buy of ${name} [${ticker}]`,
+            signature: buySignature,
+          });
+        } catch (buyErr) {
+          // RESILIENT: the coin is already created; a failed initial buy must not
+          // surface as a create failure.
+          console.warn(
+            "initial-buy bundle failed (coin still created)",
+            buyErr
+          );
+          await toastTransaction({
+            title: "initial buy failed (coin still created)",
+            description: (buyErr as any)?.message,
+            status: "error",
+          });
+        }
       }
     } catch (e) {
       console.error("could not create", e);
 
       await toastTransaction({
         title: "Could not create",
-        description: (e as any)?.message,
+        description: humanizeWalletError(e),
         status: "error",
       });
     }
@@ -741,6 +948,11 @@ export default function Create() {
           {error && <ErrorMessage>{error}</ErrorMessage>}
 
           <div>Cost to deploy: ~0.02 SOL</div>
+          <div className="text-xs text-gray-400">
+            Plus ~{ESTIMATED_RENT_SOL.toFixed(2)} SOL one-time rent (paid by you)
+            to open Orca venues + program-owned LP positions for your coin right
+            after creation.
+          </div>
         </div>
       </div>
     </div>

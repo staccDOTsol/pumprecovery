@@ -3,12 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { HowItWorks } from "./HowItWorks";
+import { WhyNotPump } from "./WhyNotPump";
+import { ReferralLink } from "./ReferralLink";
 import { useIsClient } from "@uidotdev/usehooks";
 import { Wallet } from "./Wallet";
 import { LatestTrade } from "./LatestTrade";
 import { WalleWithoutAuth } from "./WalletWithoutAuth";
 import { LatestCoin } from "./LatestCoin";
-import { SelectedChain } from "./SelectedChain";
 import clsx from "clsx";
 import { useProfile } from "@/providers/ProfileProvider";
 
@@ -17,14 +18,7 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
   const { address, user } = useProfile();
 
   return (
-    <div
-      style={{
-        display: "grid",
-        height: "100vh",
-        gridTemplateRows: "auto auto auto 1fr",
-        alignItems: "start",
-      }}
-    >
+    <div className="flex flex-col min-h-screen">
       {/* <div className="border p-2 border-green-400 text-green-400">
           Charts and trades are currently being updated -- site might be affected for the next ~20 minutes.
         </div> */}
@@ -45,33 +39,15 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
             <div className="flex gap-2">
               <a
                 className="text-sm text-white hover:underline hover:font-bold"
-                href="https://twitter.com/pumpdotfun"
+                href="https://twitter.com/staccoverflow"
                 target="_blank"
                 rel="noopener noreferrer"
               >
                 [twitter]
               </a>
-
-              <a
-                className="text-sm text-white hover:underline hover:font-bold"
-                href="https://t.me/pumpfunsupport"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                [support]
-              </a>
             </div>
 
             <div className="flex gap-2">
-              <a
-                className="text-sm text-white hover:underline hover:font-bold"
-                href="https://t.me/launchonpump"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                [telegram]
-              </a>
-
               <a
                 className="text-sm text-white hover:underline hover:font-bold"
                 href="https://github.com/staccDOTsol/pumprecovery"
@@ -81,7 +57,16 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
                 [github]
               </a>
 
+              <Link
+                href="/airdrop"
+                className="text-sm text-green-300 hover:font-bold hover:text-green-200"
+              >
+                [airdrop]
+              </Link>
+
+              {isClient && <WhyNotPump />}
               {isClient && <HowItWorks />}
+              {isClient && <ReferralLink />}
             </div>
           </div>
 
@@ -136,23 +121,9 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
         <LatestTrade />
       </div>
 
-      <div className={"justify-self-center"}>
-        <SelectedChain />
-      </div>
 
-      <div className="bg-orange-700 p-1 justify-self-center rounded text-white m-4 text-center">
-        Solana is facing congestion issues; This will affect how long it takes
-        for your transactions to submit and the speed of raydium migrations.
-        View more info{" "}
-        <a
-          href="https://twitter.com/0xMert_/status/1776023674098754014"
-          className="text-blue-200 hover:underline"
-        >
-          here
-        </a>
-      </div>
 
-      <main className="h-full">{children}</main>
+      <main className="flex-1">{children}</main>
 
       {/* Disclaimer + GitHub at bottom of page - rebrand to stacc.art demo */}
       <footer className="p-2 text-center text-xs text-gray-400 border-t border-gray-800 mt-4">

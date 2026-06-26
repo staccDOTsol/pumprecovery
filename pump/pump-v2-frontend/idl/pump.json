@@ -233,6 +233,93 @@
           "isSigner": false
         },
         {
+          "name": "referrer",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referrer2",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referrer3",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referralRecord",
+          "isMut": true,
+          "isSigner": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  114,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "type": "publicKey",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "houseMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "userHouseAta",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "houseTokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaSolNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaUsdcNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaHouseNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "bundleGuard",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "instructionsSysvar",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
           "name": "event_authority",
           "pda": {
             "seeds": [
@@ -330,7 +417,89 @@
           "isSigner": false
         },
         {
-          "name": "rent",
+          "name": "referrer",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referrer2",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referrer3",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "referralRecord",
+          "isMut": true,
+          "isSigner": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  114,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "type": "publicKey",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "houseMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "userHouseAta",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "houseTokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaSolNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaUsdcNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaHouseNewmeme",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "orcaProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "bundleGuard",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "instructionsSysvar",
           "isMut": false,
           "isSigner": false
         },

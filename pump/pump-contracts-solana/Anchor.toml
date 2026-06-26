@@ -12,7 +12,7 @@ url = "https://api.apr.dev"
 
 [provider]
 cluster = "localnet"
-wallet = "~/jjj.json"
+wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/pump.ts"
@@ -49,3 +49,24 @@ address = "9DCxsMizn3H1hprZ7xWe6LDzeUeZBksYFpBWBtSf1PQX"
 
 [[test.validator.clone]]
 address = "7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5"
+
+# Orca Whirlpool mainnet fixtures for local testing / surfpool
+[[test.validator.clone]]
+address = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+
+[[test.validator.clone]]
+address = "2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"  # WhirlpoolsConfig mainnet
+
+[[test.validator.clone]]
+address = "777H5H3Tp9U11uRVRzFwM8BinfiakbaLT8vQpeuhvEiH"  # ConfigExtension
+
+# Fee tiers (use 64 and 128 for memes)
+[[test.validator.clone]]
+address = "HT55NVGVTjWmWLjV7BrSMPVZ7ppU8T2xE5nCAZ6YaGad"  # tick 64 0.3%
+
+[[test.validator.clone]]
+address = "BGnhGXT9CCt5WYS23zg9sqsAT2MGXkq7VSwch9pML82W"  # tick 128 1%
+
+# House mint (the second mint on the platform)
+[[test.validator.clone]]
+address = "Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump"

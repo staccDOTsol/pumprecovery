@@ -16,19 +16,36 @@ export const useLikes = (id: string | number) => {
   const { toastTransaction } = useToast();
 
   const isTokenExpired = (token: string) => {
-    const payloadBase64 = token.split(".")[1];
-    const decodedJson = Buffer.from(payloadBase64, "base64").toString();
-    const decoded = JSON.parse(decodedJson);
-    const exp = decoded.exp;
-    const now = Date.now() / 1000;
-    return exp < now;
+    if (!token) return true;
+    const parts = token.split(".");
+    const payloadBase64 = parts[1];
+    if (!payloadBase64) return true;
+    try {
+      const decodedJson = Buffer.from(payloadBase64, "base64").toString();
+      const decoded = JSON.parse(decodedJson);
+      const exp = decoded.exp;
+      const now = Date.now() / 1000;
+      return exp < now;
+    } catch {
+      return true;
+    }
   };
 
   const fetchLikes = async () => {
     try {
-      const likes = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/likes/${id}`
-      ).then((r) => r.json());
+      );
+      if (!res.ok) {
+        return;
+      }
+      let likes: any = [];
+      try {
+        likes = await res.json();
+      } catch (jsonErr) {
+        console.warn('failed to parse likes json', jsonErr);
+        likes = [];
+      }
 
       if (typeof likes?.length !== "number") return;
 

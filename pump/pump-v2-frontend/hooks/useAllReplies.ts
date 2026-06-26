@@ -22,7 +22,13 @@ export const useAllReplies = ({
         setReplies([]);
         return;
       }
-      const replies = await res.json();
+      let replies: any = [];
+      try {
+        replies = await res.json();
+      } catch (jsonErr) {
+        console.warn('failed to parse replies json', jsonErr);
+        replies = [];
+      }
       setReplies(Array.isArray(replies) ? replies : []);
     } catch (e) {
       console.error("failed to fetch replies", e);
