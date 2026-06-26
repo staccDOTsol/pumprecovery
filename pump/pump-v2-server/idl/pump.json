@@ -589,6 +589,51 @@
           "index": false
         }
       ]
+    },
+    {
+      "name": "TradeEvent",
+      "fields": [
+        {
+          "name": "mint",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "solAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "tokenAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "isBuy",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        },
+        {
+          "name": "virtualSolReserves",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "virtualTokenReserves",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ],
   "errors": [
