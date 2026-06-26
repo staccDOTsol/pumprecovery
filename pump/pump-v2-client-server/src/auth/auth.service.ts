@@ -19,7 +19,7 @@ export class AuthService {
     //   throw new UnauthorizedException('Invalid timestamp');
     // }
 
-    const message = `Sign in to pump.fun: ${timestamp}`;
+    const message = `Sign in to stacc.art: ${timestamp}`;
     const verified = sign.detached.verify(
       new TextEncoder().encode(message),
       bs58.decode(signature),
