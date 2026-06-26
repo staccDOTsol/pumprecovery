@@ -77,27 +77,44 @@ export class CoinsService {
     const { name: eventName, symbol: eventSymbol, uri, mint, bondingCurve, user } = event;
     const timestamp = tx ? tx.blockTime * 1000 : Date.now();
 
-    const fetchIpfsData = () => {
-      return fetch(uri).then((res) => res.json());
+    const fetchIpfsData = async () => {
+      // Use reliable IPFS gateway; cf-ipfs.com has DNS issues on some hosts
+      const hash = uri.includes('/ipfs/') ? uri.split('/ipfs/')[1] : uri;
+      const gateways = [
+        `https://ipfs.io/ipfs/${hash}`,
+        `https://cloudflare-ipfs.com/ipfs/${hash}`,
+        uri.replace('cf-ipfs.com', 'ipfs.io')
+      ];
+      for (const gw of gateways) {
+        try {
+          const res = await fetch(gw, { signal: AbortSignal.timeout(8000) });
+          if (res.ok) return await res.json();
+        } catch (e) {
+          console.log('gateway failed', gw, e.message);
+        }
+      }
+      throw new Error('All IPFS gateways failed for ' + hash);
     };
 
     const fetchIpfsDataWithRetry = async () => {
-      const maxRetryDuration = 120_000; // Maximum retry duration in milliseconds (120 seconds)
-      const retryInterval = 10_000; // Retry interval in milliseconds (10 seconds)
-      let elapsedTime = 0; // Track the elapsed time
+      // Short retry for indexing to avoid blocking requests; fallback to event data
+      const maxRetryDuration = 5000; // 5 seconds max
+      const retryInterval = 1000;
+      let elapsedTime = 0;
 
       while (elapsedTime < maxRetryDuration) {
         try {
-          const data = await fetchIpfsData(); // Attempt to fetch the data
-          return data; // Return the data if fetch is successful
+          const data = await fetchIpfsData();
+          return data;
         } catch (error) {
-          console.log('Failed to fetch IPFS data, retrying...', error);
-          await sleep(retryInterval); // Wait for the retry interval before retrying
-          elapsedTime += retryInterval; // Update the elapsed time
+          console.log('Failed to fetch IPFS data, retrying...', error.message || error);
+          await sleep(retryInterval);
+          elapsedTime += retryInterval;
         }
       }
 
-      throw new Error('Failed to fetch IPFS data within the retry limit.');
+      console.log('IPFS fetch timed out quickly, using event name/symbol');
+      return { description: '', image: '', telegram: '', twitter: '', website: '', showName: true };
     };
 
     try {
