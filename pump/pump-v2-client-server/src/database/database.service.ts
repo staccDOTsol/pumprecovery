@@ -292,20 +292,65 @@ export class DatabaseService {
   async getReplies(mint: string, user: string): Promise<any> {
     try {
       const startTime = await this.startProfile('getReplies');
-      const { data: replies, error } = await this.supabase.rpc(
-        'get_replies_for_mint',
-        { p_mint: mint, p_user: user },
-      );
+      // direct query to avoid broken get_replies_for_mint RPC (bad columns)
+      const { data: rawReplies, error } = await this.supabase
+        .from('replies')
+        .select('id, mint, file_uri, text, "user", timestamp, total_likes, hidden')
+        .eq('mint', mint)
+        .eq('hidden', false)
+        .order('id', { ascending: true });
 
       if (error) {
         throw error;
+      }
+
+      let replies = (rawReplies || []).map((r: any) => ({
+        ...r,
+        username: null,
+        profile_image: null,
+        liked_by_user: false,
+      }));
+
+      if (replies.length > 0) {
+        // fetch usernames/profile via users2
+        const userAddrs = [...new Set(replies.map((r: any) => r.user).filter(Boolean))];
+        if (userAddrs.length) {
+          const { data: users } = await this.supabase
+            .from('users2')
+            .select('address, username, profile_image')
+            .in('address', userAddrs);
+          const uMap = new Map((users || []).map((u: any) => [u.address, u]));
+          replies = replies.map((r: any) => {
+            const u = uMap.get(r.user);
+            return {
+              ...r,
+              username: u?.username || null,
+              profile_image: u?.profile_image || null,
+            };
+          });
+        }
+
+        // liked_by_user for the requesting viewer
+        if (user) {
+          const ids = replies.map((r: any) => r.id);
+          const { data: likes } = await this.supabase
+            .from('likes')
+            .select('target_id')
+            .eq('user', user)
+            .in('target_id', ids.map(String));
+          const likedSet = new Set((likes || []).map((l: any) => Number(l.target_id)));
+          replies = replies.map((r: any) => ({
+            ...r,
+            liked_by_user: likedSet.has(r.id),
+          }));
+        }
       }
 
       this.endProfile('getReplies', Date.now() - startTime);
       return replies;
     } catch (e) {
       console.error('Error fetching replies:', e);
-      return null;
+      return [];
     }
   }
 

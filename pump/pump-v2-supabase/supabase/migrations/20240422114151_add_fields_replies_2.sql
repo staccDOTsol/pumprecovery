@@ -1,9 +1,6 @@
 drop function if exists get_replies_for_mint;
 CREATE OR REPLACE FUNCTION get_replies_for_mint(p_mint text, p_user text)
 RETURNS TABLE (
-    signature text,
-    is_buy boolean,
-    sol_amount bigint,
     id int,
     mint text,
     file_uri text,
@@ -20,9 +17,6 @@ AS $$
 BEGIN
     RETURN QUERY
     SELECT
-        r.signature,
-        r.is_buy,
-        r.sol_amount,
         r.id,
         r.mint,
         r.file_uri,

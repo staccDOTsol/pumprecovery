@@ -95,6 +95,8 @@ export class RepliesService {
         mentions_received: user ? user.mentions_received + 1 : 1,
       });
     });
+
+    return insertedReply;
   }
 
   async updateReply(reply: any) {
