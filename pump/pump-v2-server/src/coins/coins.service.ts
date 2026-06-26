@@ -78,19 +78,42 @@ export class CoinsService {
     const timestamp = tx ? tx.blockTime * 1000 : Date.now();
 
     const fetchIpfsData = async () => {
-      // Use reliable IPFS gateway; cf-ipfs.com has DNS issues on some hosts
+      const proxyUrl = this.configService.get<string>('ipfsProxyUrl');
+
+      // Prefer the IPFS proxy (hosted on reliable infra like Vercel) when configured.
+      // Call as: GET ${proxyUrl}?uri=https://cf-ipfs.com/ipfs/...
+      if (proxyUrl) {
+        try {
+          const sep = proxyUrl.includes('?') ? '&' : '?';
+          const proxied = `${proxyUrl}${sep}uri=${encodeURIComponent(uri)}`;
+          const res = await fetch(proxied, {
+            signal: AbortSignal.timeout(12000),
+            headers: { Accept: 'application/json, */*' },
+          });
+          if (res.ok) {
+            // Proxy returns the raw body; parse as JSON for metadata.
+            return await res.json();
+          }
+          console.log('ipfs-proxy non-ok', res.status, await res.text().catch(() => ''));
+        } catch (e: any) {
+          console.log('ipfs-proxy failed, will try direct gateways', e?.message || e);
+        }
+      }
+
+      // Direct multi-gateway fallback (cf-ipfs.com often flakes on Heroku)
       const hash = uri.includes('/ipfs/') ? uri.split('/ipfs/')[1] : uri;
       const gateways = [
         `https://ipfs.io/ipfs/${hash}`,
+        `https://gateway.pinata.cloud/ipfs/${hash}`,
         `https://cloudflare-ipfs.com/ipfs/${hash}`,
-        uri.replace('cf-ipfs.com', 'ipfs.io')
+        uri.replace('cf-ipfs.com', 'ipfs.io'),
       ];
       for (const gw of gateways) {
         try {
           const res = await fetch(gw, { signal: AbortSignal.timeout(8000) });
           if (res.ok) return await res.json();
-        } catch (e) {
-          console.log('gateway failed', gw, e.message);
+        } catch (e: any) {
+          console.log('gateway failed', gw, e?.message || e);
         }
       }
       throw new Error('All IPFS gateways failed for ' + hash);
@@ -146,17 +169,15 @@ export class CoinsService {
         true,
       );
 
-      const {
-        initial_virtual_sol_reserves,
-        initial_virtual_token_reserves,
-        token_total_supply,
-      } = await this.globalParamsService.getGlobalParamsAtTimestamp(timestamp);
+      const params = await this.globalParamsService.getGlobalParamsAtTimestamp(timestamp);
 
-      const market_cap = await this.calculateMarketCap(
-        initial_virtual_sol_reserves.toString(),
-        initial_virtual_token_reserves.toString(),
-        token_total_supply.toString(),
-      );
+      // Fallback defaults (from program init) if no global_params row yet (e.g. during early reindex or missing SetParams)
+      // These are the values passed to SetParamsEvent on program init
+      const ivsr = params?.initial_virtual_sol_reserves ?? '30000000000';
+      const ivtr = params?.initial_virtual_token_reserves ?? '1073000000000000';
+      const tts = params?.token_total_supply ?? '1000000000000000';
+
+      const market_cap = await this.calculateMarketCap(ivsr, ivtr, tts);
 
       await this.databaseService.createCoin({
         name: eventName,
@@ -173,9 +194,9 @@ export class CoinsService {
         telegram,
         website,
         complete: false,
-        virtual_sol_reserves: initial_virtual_sol_reserves.toString(),
-        virtual_token_reserves: initial_virtual_token_reserves.toString(),
-        total_supply: token_total_supply.toString(),
+        virtual_sol_reserves: ivsr,
+        virtual_token_reserves: ivtr,
+        total_supply: tts,
         show_name: showName ?? true,
         market_cap,
       });
