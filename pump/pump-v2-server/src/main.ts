@@ -19,15 +19,23 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  const allowedOrigins = [
+    'https://stacc.art',
+    'https://www.stacc.art',
+    'https://pump.fun',
+    'https://www.pump.fun',
+    process.env.FRONTEND_DOMAIN,
+    'http://localhost:3000',
+  ];
+
   app.enableCors({
-    origin: [
-      'https://stacc.art',
-      'https://www.stacc.art',
-      'https://pump.fun',
-      'https://www.pump.fun',
-      process.env.FRONTEND_DOMAIN,
-      'http://localhost:3000',
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
   });
 

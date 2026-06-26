@@ -21,14 +21,22 @@ async function bootstrap() {
 
   app.set('trust proxy', true);
 
+  const allowedOrigins = [
+    'https://stacc.art',
+    'https://www.stacc.art',
+    'https://pump.fun',
+    'https://www.pump.fun',
+    'http://localhost:3000',
+  ];
+
   app.enableCors({
-    origin: [
-      'https://stacc.art',
-      'https://www.stacc.art',
-      'https://pump.fun',
-      'https://www.pump.fun',
-      'http://localhost:3000',
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
