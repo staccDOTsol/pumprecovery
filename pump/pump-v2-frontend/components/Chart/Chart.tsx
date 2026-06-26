@@ -198,8 +198,8 @@ const Chart: React.FC<ChartProps> = ({
             onHistoryCallback: (bars: any[], meta: { noData: boolean }) => void,
             onErrorCallback: (error: string) => void
           ) => {
-            async function doFetch() {
-              let tf;
+            (async () => {
+              let tf: number;
               // Adjust resolution handling to match "1S", "5", and "15"
               switch (resolution) {
                 case "1S":
@@ -212,46 +212,51 @@ const Chart: React.FC<ChartProps> = ({
                   tf = 15 * 60; // 15 minutes in seconds
                   break;
                 default:
-                  tf = resolution; // Use the resolution as is if it doesn't match the above cases
+                  tf = Number(resolution) || 1;
               }
 
               const apiUrl = `${
                 process.env.NEXT_PUBLIC_CLIENT_API_URL
               }/candlesticks/${coin.mint}/${tf.toString()}`;
 
-              // Fetch the candlestick data from the API
+              let data: any[] = [];
               try {
                 const response = await fetch(apiUrl);
-                const data = await response.json();
-                candlesticks = data;
+                if (!response.ok) {
+                  throw new Error(`HTTP ${response.status}`);
+                }
+                const json = await response.json();
+                data = Array.isArray(json) ? json : [];
               } catch (error) {
                 console.error("Failed to fetch candlesticks:", error);
-                // Handle errors (e.g., network issues, invalid responses) here
+                onErrorCallback("Failed to fetch candlesticks");
+                return;
               }
-            }
 
-            const filteredBars = candlesticks
-              .filter((candlestick) => {
-                const candleTime = candlestick.timestamp * 1000;
-                return (
-                  candleTime >= periodParams.from * 1000 &&
-                  candleTime <= periodParams.to * 1000
-                );
-              })
-              .map((candlestick) => ({
-                time: candlestick.timestamp * 1000,
-                low: candlestick.low,
-                high: candlestick.high,
-                open: candlestick.open,
-                close: candlestick.close,
-                volume: candlestick.volume,
-              }));
-            console.log(filteredBars);
-            if (filteredBars.length > 0) {
-              onHistoryCallback(filteredBars, { noData: false });
-            } else {
-              onHistoryCallback([], { noData: true });
-            }
+              const filteredBars = data
+                .filter((candlestick: any) => {
+                  if (!candlestick || typeof candlestick.timestamp !== 'number') return false;
+                  const candleTime = candlestick.timestamp * 1000;
+                  return (
+                    candleTime >= periodParams.from * 1000 &&
+                    candleTime <= periodParams.to * 1000
+                  );
+                })
+                .map((candlestick: any) => ({
+                  time: candlestick.timestamp * 1000,
+                  low: candlestick.low,
+                  high: candlestick.high,
+                  open: candlestick.open,
+                  close: candlestick.close,
+                  volume: candlestick.volume,
+                }));
+              console.log("getBars filtered:", filteredBars.length);
+              if (filteredBars.length > 0) {
+                onHistoryCallback(filteredBars, { noData: false });
+              } else {
+                onHistoryCallback([], { noData: true });
+              }
+            })();
           },
           subscribeBars: (
             symbolInfo: any,

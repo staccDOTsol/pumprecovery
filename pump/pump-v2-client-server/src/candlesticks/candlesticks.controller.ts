@@ -5,8 +5,9 @@ import { CandlesticksService } from './candlesticks.service';
 export class CandlesticksController {
   constructor(private candlesticksService: CandlesticksService) {}
 
-  @Get(':mint')
-  getAll(@Param('mint') mint: string) {
-    return this.candlesticksService.getAll(mint);
+  @Get(':mint/:tf?')
+  getAll(@Param('mint') mint: string, @Param('tf') tf?: string) {
+    const interval = tf ? parseInt(tf, 10) : undefined;
+    return this.candlesticksService.getAll(mint, interval);
   }
 }

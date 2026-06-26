@@ -241,13 +241,18 @@ export class DatabaseService {
     }
   }
 
-  async getCandlesticks(mint: string, limit: number = 1000): Promise<any> {
+  async getCandlesticks(mint: string, interval?: number, limit: number = 1000): Promise<any> {
     try {
       const startTime = await this.startProfile('getCandlesticks');
-      const { data: msg, error } = await this.supabase
-        .from('candlesticks')
+      let table = 'candlesticks';
+      if (interval === 900) table = 'candlesticks900';
+      else if (interval === 1) table = 'candlestick1';
+      let query = this.supabase
+        .from(table)
         .select('*')
-        .eq('mint', mint)
+        .eq('mint', mint);
+      // no interval filter, tables are separated by interval
+      const { data: msg, error } = await query
         .order('timestamp', { ascending: false })
         .limit(limit);
 
@@ -256,10 +261,10 @@ export class DatabaseService {
       }
 
       this.endProfile('getCandlesticks', Date.now() - startTime);
-      return msg.slice().reverse();
+      return (msg || []).slice().reverse();
     } catch (e) {
       console.error('Error fetching candlesticks:', e);
-      return null;
+      return [];
     }
   }
 
