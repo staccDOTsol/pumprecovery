@@ -201,6 +201,36 @@ export class CoinsService {
         show_name: showName ?? true,
         market_cap,
       });
+
+      // Seed initial candlesticks (for different intervals) so the chart has data from creation time
+      // even if first trades are small or pending. Uses same price calc as candle listener.
+      try {
+        const intervals = [1, 5 * 60, 15 * 60];
+        const ivsr = params?.initial_virtual_sol_reserves ?? '30000000000';
+        const ivtr = params?.initial_virtual_token_reserves ?? '1073000000000000';
+        const initialPrice =
+          new BN(ivsr).mul(new BN(10 ** 9)).div(new BN(ivtr)).toNumber() / 10 ** 9 / 10 ** 3;
+
+        // use blockTime in seconds for candle timestamp consistency
+        const createSec = tx ? tx.blockTime : Math.floor(Date.now() / 1000);
+        for (const interval of intervals) {
+          const candleTimestamp = Math.floor(createSec / interval) * interval;
+          const initialCandle = {
+            mint,
+            timestamp: candleTimestamp,
+            open: initialPrice,
+            high: initialPrice,
+            low: initialPrice,
+            close: initialPrice,
+            volume: 0,
+            slot: slot || 0,
+          };
+          await this.databaseService.upsertCandlestick(initialCandle as any, interval);
+        }
+        console.log(`seeded initial candlesticks for ${mint}`);
+      } catch (seedErr) {
+        console.log('failed to seed initial candles for chart', seedErr);
+      }
     } catch (e) {
       console.log('ERROR creating:', event, e);
       return;
