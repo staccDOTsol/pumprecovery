@@ -35,7 +35,7 @@ export class CandlesticksService {
     slot: number,
     backfill?: boolean,
   ) {
-    if (event.solAmount.lt(new BN(5000000))) return;
+    if (event.solAmount.lt(new BN(1000))) return; // allow even tiny trades for chart
     return this.candleListener([1, 5 * 60, 15 * 60], event, slot, backfill);
   }
 
