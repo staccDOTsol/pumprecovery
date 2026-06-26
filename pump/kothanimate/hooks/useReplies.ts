@@ -14,15 +14,31 @@ export interface Reply {
   profile_image?: string;
   username?: string;
   liked_by_user: boolean;
-  signature?: string;
-  is_confirmed?: boolean;
-  sol_amount?: number;
-  is_buy?: boolean;
 }
 
 export const useReplies = (mint: string, address?: string) => {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const addOptimisticReply = (partial: Partial<Reply> & { text: string; id?: number }) => {
+    const base = {
+      id: Date.now(),
+      mint,
+      user: address || '',
+      timestamp: Date.now(),
+      total_likes: 0,
+      liked_by_user: false,
+      hidden: false,
+    };
+    const optimistic: Reply = {
+      ...base,
+      ...partial,
+    } as Reply;
+    if (optimistic.id == null) {
+      optimistic.id = Date.now();
+    }
+    setReplies(prev => [optimistic, ...prev]);
+  };
 
   const fetchReplies = async () => {
     setLoading(true);
@@ -30,9 +46,23 @@ export const useReplies = (mint: string, address?: string) => {
     try {
       const query = address ? `user=${address}` : "";
 
-      const replies = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies/${mint}?${query}`
-      ).then((r) => r.json());
+      );
+      if (!res.ok) {
+        console.warn('replies fetch bad status', res.status);
+        return; // keep optimistic/prev
+      }
+      let data: any = [];
+      try {
+        data = await res.json();
+      } catch (jsonErr) {
+        console.warn('failed to parse replies json', jsonErr);
+        data = [];
+      }
+      if (!Array.isArray(data)) data = [];
+
+      const replies = data;
 
       replies.forEach((reply: Reply) => {
         const referenceRegex = /#(\d+)/g;
@@ -40,7 +70,6 @@ export const useReplies = (mint: string, address?: string) => {
         while ((match = referenceRegex.exec(reply.text)) !== null) {
           const referencedId = parseInt(match[1], 10);
 
-          // Find the reply that is referenced and add the current reply's id to its list of sub-replies
           const referencedReply = replies.find(
             (r: Reply) => r.id === referencedId
           );
@@ -54,9 +83,24 @@ export const useReplies = (mint: string, address?: string) => {
         }
       });
 
-      setReplies(replies);
+      replies.sort((a: Reply, b: Reply) => (b.id || 0) - (a.id || 0));
+
+      setReplies(prev => {
+        const highIdThreshold = 1000000000000;
+        const now = Date.now();
+        const keptOptimistics = prev.filter((r) => {
+          const notOnServer = !replies.some((s: Reply) => s.id === r.id);
+          const isHigh = (r.id || 0) > highIdThreshold;
+          const isRecent = now - ((r.timestamp || 0)) < 60_000;
+          return notOnServer && (isHigh || isRecent);
+        });
+        const merged = keptOptimistics.length ? [...replies, ...keptOptimistics] : replies;
+        merged.sort((a: Reply, b: Reply) => (b.id || 0) - (a.id || 0));
+        return merged;
+      });
     } catch (e) {
       console.error("failed to fetch replies", e);
+      // keep list
     } finally {
       setLoading(false);
     }
@@ -66,5 +110,5 @@ export const useReplies = (mint: string, address?: string) => {
     fetchReplies();
   }, [mint, address]);
 
-  return { replies, loading, fetchReplies };
+  return { replies, loading, fetchReplies, addOptimisticReply };
 };

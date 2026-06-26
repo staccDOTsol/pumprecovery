@@ -137,10 +137,10 @@ const ReplyView = ({
 
   return (
     <div
-      id={"p" + id.toString()}
+      id={"p" + (id ?? '').toString()}
       className={clsx(
         "bg-[#2e303a] p-1 text-slate-200 text-sm grid gap-1 overflow-auto",
-        hoveredId == id.toString() && "bg-green-800",
+        hoveredId == (id ?? '').toString() && "bg-green-800",
         animate && "animate-shake"
       )}
     >
@@ -181,7 +181,7 @@ const ReplyView = ({
 
         <div
           className="cursor-pointer justify-self-end hover:underline"
-          onClick={() => openCommentModal("#" + id.toString() + " ")}
+          onClick={() => openCommentModal("#" + (id ?? '').toString() + " ")}
         >
           #{id} [reply]
         </div>
@@ -262,69 +262,109 @@ const ReplyView = ({
 export const Thread = ({ coin }: { coin: Coin }) => {
   const [expandImage, setExpandImage] = useState(false);
   const [showCommentInput, setShowCommentInput] = useState(false);
-  const { loginToken, address } = useProfile();
-  const { replies, fetchReplies } = useReplies(coin.mint, address);
+  const { loginToken, address, login } = useProfile();
+  const { publicKey } = useWallet();
+  const { replies, fetchReplies, addOptimisticReply } = useReplies(coin.mint, address);
   const [replyId, setReplyId] = useState("");
   const [hoveredId, setHoveredId] = useState<string>();
   const { toastTransaction } = useToast();
   const { isAdmin } = useIsAdmin(address);
   const { ban } = useBan();
 
-  const submitReply = async (
-    comment?: string,
-    image?: File,
-    token?: string
-  ) => {
+  const submitReply = async (comment?: string, image?: File) => {
     if (!comment) return;
-    if (!token) return;
 
     const isTokenExpired = (token: string) => {
-      const payloadBase64 = token.split(".")[1];
-      const decodedJson = Buffer.from(payloadBase64, "base64").toString();
-      const decoded = JSON.parse(decodedJson);
-      const exp = decoded.exp;
-      const now = Date.now() / 1000;
-      return exp < now;
+      if (!token) return true;
+      const parts = token.split(".");
+      const payloadBase64 = parts[1];
+      if (!payloadBase64) return true;
+      try {
+        const decodedJson = Buffer.from(payloadBase64, "base64").toString();
+        const decoded = JSON.parse(decodedJson);
+        const exp = decoded.exp;
+        const now = Date.now() / 1000;
+        return exp < now;
+      } catch {
+        return true;
+      }
     };
 
-    if (!loginToken || isTokenExpired(loginToken)) {
-      await toastTransaction({
-        title: "Failed to post reply",
-        description: "Connect your wallet to post",
-        status: "error",
-      });
+    let token = loginToken;
+    if (!token || isTokenExpired(token)) {
+      if (publicKey) {
+        try {
+          await login();
+          token = localStorage.getItem("login-token") || "";
+        } catch (e) {
+          // rejected
+        }
+      }
 
-      return;
+      if (!token || isTokenExpired(token)) {
+        await toastTransaction({
+          title: "Failed to post reply",
+          description: "Sign in with your wallet to post",
+          status: "error",
+        });
+        return;
+      }
     }
 
     let fileUri: string | undefined;
     if (image) {
-      // upload the file
       const formData = new FormData();
       formData.append("file", image as File);
       const res = await fetch("/api/ipfs-file", {
         method: "POST",
         body: formData,
       });
-      fileUri = await res.json().then((res) => res.fileUri);
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        fileUri = data.fileUri;
+      }
     }
 
-    // create a POST request to /replies that contains the fileUri and comment and mint
-    await fetch(`${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies`, {
+    const postRes = await fetch(`${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${loginToken}`, // Pass the JWT token here
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         fileUri,
         text: comment,
         mint,
-        token,
       }),
     });
 
-    await fetchReplies();
+    if (!postRes.ok) {
+      const err = await postRes.json().catch(() => ({}));
+      console.error('failed to post reply', postRes.status, err);
+      if (postRes.status === 401) {
+        localStorage.setItem('login-token', '');
+      }
+      await toastTransaction({
+        title: "Failed to post reply",
+        description: err.message || "Unauthorized",
+        status: "error",
+      });
+      return;
+    }
+
+    const created = await postRes.json().catch(() => null);
+
+    addOptimisticReply({
+      text: comment,
+      file_uri: fileUri,
+      id: created?.id,
+      timestamp: created?.timestamp,
+      user: created?.user || address || '',
+    });
+
+    setTimeout(() => {
+      fetchReplies();
+    }, 800);
   };
 
   const {

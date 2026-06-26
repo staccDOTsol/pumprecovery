@@ -20,6 +20,26 @@ export const useReplies = (mint: string, address?: string) => {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const addOptimisticReply = (partial: Partial<Reply> & { text: string; id?: number }) => {
+    const base = {
+      id: Date.now(),
+      mint,
+      user: address || '',
+      timestamp: Date.now(),
+      total_likes: 0,
+      liked_by_user: false,
+      hidden: false,
+    };
+    const optimistic: Reply = {
+      ...base,
+      ...partial,
+    } as Reply;
+    if (optimistic.id == null) {
+      optimistic.id = Date.now();
+    }
+    setReplies(prev => [optimistic, ...prev]);
+  };
+
   const fetchReplies = async () => {
     setLoading(true);
 
@@ -30,11 +50,17 @@ export const useReplies = (mint: string, address?: string) => {
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies/${mint}?${query}`
       );
       if (!res.ok) {
-        console.warn('replies fetch bad status', res.status);
-        setReplies([]);
+        console.warn('replies fetch bad status', res.status, 'body:', (await res.clone().text().catch(()=>'')));
+        // keep existing list (optimistic etc.)
         return;
       }
-      let replies = await res.json();
+      let replies: any = [];
+      try {
+        replies = await res.json();
+      } catch (jsonErr) {
+        console.warn('failed to parse replies json', jsonErr);
+        replies = [];
+      }
       if (!Array.isArray(replies)) replies = [];
 
       replies.forEach((reply: Reply) => {
@@ -57,10 +83,26 @@ export const useReplies = (mint: string, address?: string) => {
         }
       });
 
-      setReplies(replies);
+      // newest first so just-posted replies are visible at top
+      replies.sort((a: Reply, b: Reply) => (b.id || 0) - (a.id || 0));
+
+      setReplies(prev => {
+        // keep any recent optimistics (high id or just-posted) that server fetch hasn't picked up yet (replication / visibility delay)
+        const highIdThreshold = 1000000000000;
+        const now = Date.now();
+        const keptOptimistics = prev.filter((r) => {
+          const notOnServer = !replies.some((s: Reply) => s.id === r.id);
+          const isHigh = (r.id || 0) > highIdThreshold;
+          const isRecent = now - ((r.timestamp || 0)) < 60_000;
+          return notOnServer && (isHigh || isRecent);
+        });
+        const merged = keptOptimistics.length ? [...replies, ...keptOptimistics] : replies;
+        merged.sort((a: Reply, b: Reply) => (b.id || 0) - (a.id || 0));
+        return merged;
+      });
     } catch (e) {
       console.error("failed to fetch replies", e);
-      setReplies([]);
+      // do not clear the list on error (keep optimistic + previous)
     } finally {
       setLoading(false);
     }
@@ -70,5 +112,5 @@ export const useReplies = (mint: string, address?: string) => {
     fetchReplies();
   }, [mint, address]);
 
-  return { replies, loading, fetchReplies };
+  return { replies, loading, fetchReplies, addOptimisticReply };
 };
