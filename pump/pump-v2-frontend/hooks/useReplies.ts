@@ -26,9 +26,16 @@ export const useReplies = (mint: string, address?: string) => {
     try {
       const query = address ? `user=${address}` : "";
 
-      const replies = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies/${mint}?${query}`
-      ).then((r) => r.json());
+      );
+      if (!res.ok) {
+        console.warn('replies fetch bad status', res.status);
+        setReplies([]);
+        return;
+      }
+      let replies = await res.json();
+      if (!Array.isArray(replies)) replies = [];
 
       replies.forEach((reply: Reply) => {
         const referenceRegex = /#(\d+)/g;
@@ -53,6 +60,7 @@ export const useReplies = (mint: string, address?: string) => {
       setReplies(replies);
     } catch (e) {
       console.error("failed to fetch replies", e);
+      setReplies([]);
     } finally {
       setLoading(false);
     }

@@ -10,34 +10,48 @@ export const useCoin = (token: string) => {
   const fetchCoin = async (token: string) => {
     setLoading(true);
 
-    const coin = await fetch(
-      `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/coins/${token}`
-    ).then((r) => r.json());
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/coins/${token}`
+      );
+      if (!res.ok) {
+        console.warn('coins fetch bad status', res.status);
+        setLoading(false);
+        return;
+      }
+      const coin = await res.json();
 
-    coin.image_uri = coin.image_uri.replace(
-      "https://cf-ipfs.com/ipfs/",
-      ipfsPrefix
-    );
+      if (coin.image_uri) {
+        coin.image_uri = coin.image_uri.replace(
+          "https://cf-ipfs.com/ipfs/",
+          ipfsPrefix
+        );
+      }
+      if (coin.metadata_uri) {
+        coin.metadata_uri = coin.metadata_uri.replace(
+          "https://cf-ipfs.com/ipfs/",
+          ipfsPrefix
+        );
+      }
 
-    coin.metadata_uri = coin.metadata_uri.replace(
-      "https://cf-ipfs.com/ipfs/",
-      ipfsPrefix
-    );
+      if (coin.twitter && !coin.twitter.startsWith("https://")) {
+        coin.twitter = `https://${coin.twitter}`;
+      }
 
-    if (coin.twitter && !coin.twitter.startsWith("https://")) {
-      coin.twitter = `https://${coin.twitter}`;
+      if (coin.telegram && !coin.telegram.startsWith("https://")) {
+        coin.telegram = `https://${coin.telegram}`;
+      }
+
+      if (coin.website && !coin.website.startsWith("https://")) {
+        coin.website = `https://${coin.website}`;
+      }
+
+      setCoin(coin);
+    } catch (e) {
+      console.error('failed to fetch coin', e);
+    } finally {
+      setLoading(false);
     }
-
-    if (coin.telegram && !coin.telegram.startsWith("https://")) {
-      coin.telegram = `https://${coin.telegram}`;
-    }
-
-    if (coin.website && !coin.website.startsWith("https://")) {
-      coin.website = `https://${coin.website}`;
-    }
-
-    setCoin(coin);
-    setLoading(false);
   };
 
   useEffect(() => {

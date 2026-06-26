@@ -15,13 +15,18 @@ export const useAllReplies = ({
     setLoading(true);
 
     try {
-      const replies = await fetch(
+      const res = await fetch(
         `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/replies?limit=${limit}&offset=${offset}`
-      ).then((r) => r.json());
-
-      setReplies(replies);
+      );
+      if (!res.ok) {
+        setReplies([]);
+        return;
+      }
+      const replies = await res.json();
+      setReplies(Array.isArray(replies) ? replies : []);
     } catch (e) {
       console.error("failed to fetch replies", e);
+      setReplies([]);
     } finally {
       setLoading(false);
     }

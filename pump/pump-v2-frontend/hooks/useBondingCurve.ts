@@ -1,6 +1,6 @@
 import { BN } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useGlobal } from "./useGlobal";
 import { usePumpProgram } from "./usePumpProgram";
@@ -24,6 +24,7 @@ export const useBondingCurve = (coin?: Coin) => {
   const { global } = useGlobal();
   const { pumpProgram } = usePumpProgram();
   const [solPrice, setSolPrice] = useState(0);
+  const lastSolPriceFetchRef = useRef(0);
 
   const getFinalVirtualSolReserves = (): BN => {
     return new BN(85 * 10 ** 9);
@@ -45,11 +46,21 @@ export const useBondingCurve = (coin?: Coin) => {
   };
 
   const fetchSolPrice = async () => {
-    const { solPrice } = await fetch(
-      `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/sol-price`
-    ).then((r) => r.json());
-
-    setSolPrice(solPrice);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/sol-price`
+      );
+      if (!res.ok) {
+        console.warn('sol-price fetch failed', res.status);
+        if (!solPrice) setSolPrice(100); // fallback
+        return;
+      }
+      const { solPrice: price } = await res.json();
+      setSolPrice(price);
+    } catch (e) {
+      console.error('failed to fetch sol price', e);
+      if (!solPrice) setSolPrice(100);
+    }
   };
 
   const watchBondingCurve = () => {
@@ -73,7 +84,13 @@ export const useBondingCurve = (coin?: Coin) => {
 
   useEffect(() => {
     const removeListener = watchBondingCurve();
-    fetchSolPrice();
+
+    // throttle to avoid 429 loops on /sol-price
+    const now = Date.now();
+    if (now - lastSolPriceFetchRef.current > 30000) {
+      lastSolPriceFetchRef.current = now;
+      fetchSolPrice();
+    }
 
     return () => {
       if (removeListener) removeListener();

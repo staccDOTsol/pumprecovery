@@ -32,7 +32,7 @@ import { FollowingModule } from './following/following.module';
     ThrottlerModule.forRoot([
       {
         ttl: 60_000,
-        limit: 50,
+        limit: 150, // raised; many public reads per page load (coins, candles, replies, sol-price, trades...)
       },
     ]),
     ConfigModule.forRoot({

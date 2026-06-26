@@ -31,12 +31,22 @@ export const useTrades = ({
   const fetchTrades = async () => {
     setLoading(true);
 
-    const trades = await fetch(
-      `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/trades/${mint}?limit=${limit}&offset=${offset}`
-    ).then((r) => r.json());
-
-    setTrades(trades);
-    setLoading(false);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/trades/${mint}?limit=${limit}&offset=${offset}`
+      );
+      if (!res.ok) {
+        setTrades([]);
+        return;
+      }
+      const trades = await res.json();
+      setTrades(Array.isArray(trades) ? trades : []);
+    } catch (e) {
+      console.error('failed to fetch trades', e);
+      setTrades([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

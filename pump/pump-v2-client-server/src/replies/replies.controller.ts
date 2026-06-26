@@ -19,7 +19,7 @@ import { getClientIp } from 'src/utils/getClientIp';
 export class RepliesController {
   constructor(private readonly repliesService: RepliesService) {}
 
-  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @UseGuards(AuthGuard('jwt'))
   @Post()
   async createReply(@Body() reply: ReplyDto, @Req() req: any) {
@@ -58,6 +58,8 @@ export class RepliesController {
   }
 
   @Get(':mint')
+  // public read, raise limit vs global throttler to avoid 429s on coin pages
+  @Throttle({ default: { ttl: 60_000, limit: 120 } })
   async getReplies(@Param('mint') mint: string, @Query('user') user?: string) {
     user = user || null;
     const replies = await this.repliesService.getReplies(mint, user);

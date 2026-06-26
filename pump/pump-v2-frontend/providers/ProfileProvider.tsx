@@ -64,8 +64,12 @@ export const ProfileProvider = ({
       ).then((r) => r.json());
 
       setLoginToken(access_token);
-    } catch (e) {
-      console.error("Failed to login", e);
+    } catch (e: any) {
+      if (e?.name === 'WalletSignMessageError' || e?.message?.includes('rejected')) {
+        console.info('User rejected wallet signature');
+      } else {
+        console.error("Failed to login", e);
+      }
     } finally {
       setLoginLoading(false);
     }
