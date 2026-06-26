@@ -1,6 +1,6 @@
 import { BN } from '@coral-xyz/anchor';
 import { Injectable } from '@nestjs/common';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { PublicKey } from '@solana/web3.js';
 import { DatabaseService } from 'src/database/database.service';
 import { SolProviderService } from 'src/sol-provider/sol-provider.service';
@@ -18,6 +18,7 @@ export class BalancesService {
       new PublicKey(mint),
       new PublicKey(address),
       false,
+      TOKEN_2022_PROGRAM_ID,
     );
 
     const balance = await this.solProviderService.connection

@@ -1,7 +1,7 @@
 import { BN } from '@coral-xyz/anchor';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { Connection, PublicKey } from '@solana/web3.js';
 import sleep from 'sleep-promise';
 import { DatabaseService } from 'src/database/database.service';
@@ -17,7 +17,8 @@ export class BalancesService {
     const associatedUser = getAssociatedTokenAddressSync(
       new PublicKey(mint),
       new PublicKey(address),
-      true,
+      false,
+      TOKEN_2022_PROGRAM_ID,
     );
 
     const connection = new Connection(
