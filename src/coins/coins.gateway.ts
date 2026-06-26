@@ -9,10 +9,10 @@ import { Server } from 'http';
   namespace: '/coins',
   cors: {
     origin: [
+      'https://stacc.art',
+      'https://www.stacc.art',
       'https://pump.fun',
       'https://www.pump.fun',
-      'https://beta.pump.fun',
-      'https://devnet.pump.fun',
       process.env.FRONTEND_DOMAIN,
       'http://localhost:3000',
     ],

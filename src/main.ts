@@ -21,13 +21,12 @@ async function bootstrap() {
 
   app.enableCors({
     origin: [
+      'https://stacc.art',
+      'https://www.stacc.art',
       'https://pump.fun',
       'https://www.pump.fun',
-      'https://beta.pump.fun',
-      'https://devnet.pump.fun',
       process.env.FRONTEND_DOMAIN,
       'http://localhost:3000',
-      // 'https://pumpdash.vercel.app',
     ],
     credentials: true,
   });
