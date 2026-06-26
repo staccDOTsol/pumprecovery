@@ -38,6 +38,7 @@ async function bootstrap() {
     },
     credentials: true,
   });
+  // CORS for stacc.art 1782446318
 
   app.use(cookieParser());
 
