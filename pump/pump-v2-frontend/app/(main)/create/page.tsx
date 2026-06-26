@@ -19,12 +19,16 @@ import {
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
   getAccount,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
+import { SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { useToast } from "@/components/ui/use-toast";
 import { Oval } from "react-loader-spinner";
 import { ErrorMessage } from "@/components/ErrorMessage";
@@ -368,14 +372,30 @@ export default function Create() {
       const associatedBondingCurveAccount = getAssociatedTokenAddressSync(
         mintKeyPair.publicKey,
         bondingCurvePDA,
-        true
+        true,
+        TOKEN_2022_PROGRAM_ID
       );
       const [globalPDA] = PublicKey.findProgramAddressSync(
         [utils.bytes.utf8.encode("global")],
         pumpProgram.programId
       );
 
+      const [eventAuthorityPDA] = PublicKey.findProgramAddressSync(
+        [utils.bytes.utf8.encode("__event_authority")],
+        pumpProgram.programId
+      );
+
       const instructions: TransactionInstruction[] = [];
+
+      // Pre-fund the mint with rent so the program's Create can allocate the mint account
+      // without "Insufficient Funds For Rent". ~0.02 SOL as per deploy cost.
+      instructions.push(
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: mintKeyPair.publicKey,
+          lamports: Math.floor(0.02 * LAMPORTS_PER_SOL),
+        })
+      );
 
       const createInstruction = await pumpProgram.methods
         .create(name, ticker, metadataUri)
@@ -385,6 +405,13 @@ export default function Create() {
           bondingCurve: bondingCurvePDA,
           associatedBondingCurve: associatedBondingCurveAccount,
           global: globalPDA,
+          user: wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+          ['event_authority']: eventAuthorityPDA,
+          program: pumpProgram.programId,
         })
         .signers([mintKeyPair])
         .instruction();
@@ -395,7 +422,8 @@ export default function Create() {
         const associatedUser = getAssociatedTokenAddressSync(
           mintKeyPair.publicKey,
           wallet.publicKey,
-          false
+          false,
+          TOKEN_2022_PROGRAM_ID
         );
 
         const userTokenAccount = await getAccount(
@@ -404,31 +432,18 @@ export default function Create() {
         ).catch((e) => null);
 
         // if user account doesnt exist add an instruction to create it
+        // (in the create tx, so the follow-up buy tx can use it)
         if (!userTokenAccount) {
           instructions.push(
             createAssociatedTokenAccountInstruction(
               wallet.publicKey,
               associatedUser,
               wallet.publicKey,
-              mintKeyPair.publicKey
+              mintKeyPair.publicKey,
+              TOKEN_2022_PROGRAM_ID
             )
           );
         }
-
-        const buyInstruction = await pumpProgram.methods
-          .buy(buyParams.amount, buyParams.solAmount)
-          .accounts({
-            feeRecipient: global.feeRecipient,
-            global: globalPDA,
-            mint: mintKeyPair.publicKey,
-            bondingCurve: bondingCurvePDA,
-            associatedBondingCurve: associatedBondingCurveAccount,
-            associatedUser,
-            user: wallet.publicKey,
-          })
-          .instruction();
-
-        instructions.push(buyInstruction);
       }
 
       const recentBlockhash = await connection
@@ -453,6 +468,7 @@ export default function Create() {
             ComputeBudgetProgram.setComputeUnitPrice({
               microLamports: priorityFee,
             }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
             ...instructions,
           ].filter((v) => v !== null) as TransactionInstruction[],
         }).compileToV0Message()
@@ -486,6 +502,75 @@ export default function Create() {
           </Link>
         ),
       });
+
+      // If user chose to buy some at creation, do the buy as a follow-up tx.
+      // This way the create tx always succeeds (the Buy ix was previously causing
+      // the whole tx to revert due to associated_bonding_curve not being seen as
+      // initialized or constraint mismatch in the current program version).
+      if (buyParams.amount.gt(new BN(0))) {
+        const associatedUser = getAssociatedTokenAddressSync(
+          mintKeyPair.publicKey,
+          wallet.publicKey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const buyInstruction = await pumpProgram.methods
+          .buy(buyParams.amount, buyParams.solAmount)
+          .accounts({
+            global: globalPDA,
+            feeRecipient: global.feeRecipient,
+            mint: mintKeyPair.publicKey,
+            bondingCurve: bondingCurvePDA,
+            associatedBondingCurve: associatedBondingCurveAccount,
+            associatedUser,
+            user: wallet.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_2022_PROGRAM_ID,
+            rent: SYSVAR_RENT_PUBKEY,
+            ['event_authority']: eventAuthorityPDA,
+            program: pumpProgram.programId,
+          })
+          .instruction();
+
+        const buyTxInstructions = [
+          tipAccount
+            ? SystemProgram.transfer({
+                fromPubkey: wallet.publicKey,
+                toPubkey: new PublicKey(tipAccount),
+                lamports: Math.max(
+                  Math.floor((priorityFee * 300_000) / 1_000_000),
+                  300000
+                ),
+              })
+            : null,
+          ComputeBudgetProgram.setComputeUnitPrice({
+            microLamports: priorityFee,
+          }),
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+          buyInstruction,
+        ].filter((v) => v !== null) as TransactionInstruction[];
+
+        const buyRecent = await connection
+          .getLatestBlockhash("finalized")
+          .then((v) => v.blockhash);
+
+        const buyTx = new VersionedTransaction(
+          new TransactionMessage({
+            payerKey: publicKey,
+            recentBlockhash: buyRecent,
+            instructions: buyTxInstructions,
+          }).compileToV0Message()
+        );
+
+        const signedBuy = await signTransaction(buyTx);
+        const buySignature = await sendTransaction(signedBuy, connection);
+
+        await toastTransaction({
+          title: `initial buy of ${name} [${ticker}]`,
+          signature: buySignature,
+        });
+      }
     } catch (e) {
       console.error("could not create", e);
 

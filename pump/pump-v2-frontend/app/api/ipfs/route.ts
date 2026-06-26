@@ -62,7 +62,7 @@ export const POST = async (req: Request) => {
       name,
       symbol,
       description,
-      image: `https://cf-ipfs.com/ipfs/${imageIpfsHash}`,
+      image: `https://ipfs.io/ipfs/${imageIpfsHash}`,
       showName,
       createdOn: "https://pump.fun",
     };
@@ -75,7 +75,7 @@ export const POST = async (req: Request) => {
 
     return Response.json({
       metadata,
-      metadataUri: `https://cf-ipfs.com/ipfs/${metaplexIpfsHash}`,
+      metadataUri: `https://ipfs.io/ipfs/${metaplexIpfsHash}`,
     });
   } catch (e: any) {
     console.error("ipfs upload failed", e);

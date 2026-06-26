@@ -103,10 +103,11 @@ export class CandlesticksService {
           const coin = await this.coinsService.getCoinByMint(
             event.mint.toBase58(),
           );
-          const { initial_virtual_sol_reserves, initial_virtual_token_reserves } =
-            await this.globalParamsService.getGlobalParamsAtTimestamp(
+          const params = await this.globalParamsService.getGlobalParamsAtTimestamp(
               1711112108000
             );
+          const initial_virtual_sol_reserves = params?.initial_virtual_sol_reserves ?? '30000000000';
+          const initial_virtual_token_reserves = params?.initial_virtual_token_reserves ?? '1073000000000000';
 
           initialPrice =
             new BN(initial_virtual_sol_reserves)

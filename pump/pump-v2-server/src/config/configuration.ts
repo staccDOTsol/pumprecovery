@@ -32,4 +32,5 @@ export default () => ({
   tcEndDate: process.env.TC_END_DATE,
   kingOfTheHillMarketCap: process.env.KING_OF_THE_HILL_MARKET_CAP,
   clientApiUrl: process.env.CLIENT_API_URL,
+  ipfsProxyUrl: process.env.IPFS_PROXY_URL,
 });

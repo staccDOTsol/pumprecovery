@@ -12,7 +12,7 @@ export const useIpfsPrefix = () => {
   return context;
 };
 
-const DEFAULT_URL = "https://pump.mypinata.cloud/ipfs/";
+const DEFAULT_URL = "https://ipfs.io/ipfs/";
 export const IpfsPrefixProvider = ({
   children,
 }: {
@@ -24,9 +24,9 @@ export const IpfsPrefixProvider = ({
     const testFile = "QmXeG5tTjC63hjTF7a4GcUyetE6yPcsR4rBzX7wb8mmpzg";
 
     const ipfsPrefixes = [
-      "https://cf-ipfs.com/ipfs/",
-      "https://gateway.pinata.cloud/ipfs/",
       "https://ipfs.io/ipfs/",
+      "https://gateway.pinata.cloud/ipfs/",
+      "https://cloudflare-ipfs.com/ipfs/",
     ];
 
     await fetch(`${DEFAULT_URL}${testFile}`)

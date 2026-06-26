@@ -36,6 +36,6 @@ export const POST = async (req: Request, res: NextApiResponse) => {
   const { IpfsHash } = response;
 
   return Response.json({
-    fileUri: `https://cf-ipfs.com/ipfs/${IpfsHash}`,
+    fileUri: `https://ipfs.io/ipfs/${IpfsHash}`,
   });
 };
