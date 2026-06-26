@@ -5,7 +5,7 @@ import { Program, AnchorProvider, Idl, utils } from '@coral-xyz/anchor';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { ConfigService } from '@nestjs/config';
 import pumpIdl from '../../idl/pump.json';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { EventListenerService } from 'src/event-listener/event-listener.service';
 import { BN } from '@coral-xyz/anchor';
 import { Coin } from './entities/coin.entity';
@@ -167,6 +167,7 @@ export class CoinsService {
         new PublicKey(mint),
         new PublicKey(bondingCurve),
         true,
+        TOKEN_2022_PROGRAM_ID,
       );
 
       const params = await this.globalParamsService.getGlobalParamsAtTimestamp(timestamp);

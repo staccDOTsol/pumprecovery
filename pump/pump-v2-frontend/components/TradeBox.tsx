@@ -14,6 +14,8 @@ import { usePumpProgram } from "@/hooks/usePumpProgram";
 import { useGlobal } from "@/hooks/useGlobal";
 import {
   ACCOUNT_SIZE,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
   createInitializeAccountInstruction,
@@ -24,12 +26,14 @@ import {
 import {
   ComputeBudgetProgram,
   PublicKey,
+  SYSVAR_RENT_PUBKEY,
   SystemProgram,
   Transaction,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
+import { utils } from "@coral-xyz/anchor";
 import {
   useAnchorWallet,
   useConnection,
@@ -167,10 +171,23 @@ export default function TradeBox({
         tokensToBuy = parsedAmount;
       }
 
+      const eventAuthorityPDA = PublicKey.findProgramAddressSync(
+        [utils.bytes.utf8.encode("__event_authority")],
+        pumpProgram.programId
+      )[0];
+
       const associatedUser = getAssociatedTokenAddressSync(
         new PublicKey(coin.mint),
         wallet.publicKey,
-        true
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const associatedBondingCurve = getAssociatedTokenAddressSync(
+        new PublicKey(coin.mint),
+        new PublicKey(coin.bonding_curve),
+        true,
+        TOKEN_2022_PROGRAM_ID
       );
 
       const userTokenAccount = await getAccount(
@@ -191,9 +208,14 @@ export default function TradeBox({
           global: globalPDA,
           mint: coin.mint,
           bondingCurve: coin.bonding_curve,
-          associatedBondingCurve: coin.associated_bonding_curve,
+          associatedBondingCurve,
           associatedUser,
           user: wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+          ['event_authority']: eventAuthorityPDA,
+          program: pumpProgram.programId,
         })
         .instruction();
 
@@ -225,7 +247,8 @@ export default function TradeBox({
                   wallet.publicKey,
                   associatedUser,
                   wallet.publicKey,
-                  new PublicKey(coin.mint)
+                  new PublicKey(coin.mint),
+                  TOKEN_2022_PROGRAM_ID
                 ),
             buyInstruction,
           ].filter((v) => v !== null) as TransactionInstruction[],
@@ -267,10 +290,23 @@ export default function TradeBox({
       if (!signTransaction) return;
       if (!publicKey) return;
 
+      const eventAuthorityPDA = PublicKey.findProgramAddressSync(
+        [utils.bytes.utf8.encode("__event_authority")],
+        pumpProgram.programId
+      )[0];
+
       const associatedUser = getAssociatedTokenAddressSync(
         new PublicKey(coin.mint),
         wallet.publicKey,
-        true
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const associatedBondingCurve = getAssociatedTokenAddressSync(
+        new PublicKey(coin.mint),
+        new PublicKey(coin.bonding_curve),
+        true,
+        TOKEN_2022_PROGRAM_ID
       );
 
       const amountToSell = parsedAmount;
@@ -288,9 +324,14 @@ export default function TradeBox({
           global: globalPDA,
           mint: coin.mint,
           bondingCurve: coin.bonding_curve,
-          associatedBondingCurve: coin.associated_bonding_curve,
+          associatedBondingCurve,
           associatedUser,
           user: wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+          ['event_authority']: eventAuthorityPDA,
+          program: pumpProgram.programId,
         })
         .instruction();
 
