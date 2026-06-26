@@ -22,8 +22,18 @@ async function bootstrap() {
   app.set('trust proxy', true);
 
   app.enableCors({
-    origin: true,
+    origin: [
+      'https://stacc.art',
+      'https://www.stacc.art',
+      'https://pump.fun',
+      'https://www.pump.fun',
+      'http://localhost:3000',
+    ],
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   });
+  // CORS updated for stacc.art frontend - force redeploy
 
   await app.listen(process.env.PORT || 8080);
 }
