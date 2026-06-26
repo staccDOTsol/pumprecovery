@@ -17,7 +17,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   createInitializeAccountInstruction,
   getAccount,
   getAssociatedTokenAddressSync,
@@ -243,7 +243,7 @@ export default function TradeBox({
             }),
             userTokenAccount
               ? null
-              : createAssociatedTokenAccountInstruction(
+              : createAssociatedTokenAccountIdempotentInstruction(
                   wallet.publicKey,
                   associatedUser,
                   wallet.publicKey,
@@ -328,8 +328,8 @@ export default function TradeBox({
           associatedUser,
           user: wallet.publicKey,
           systemProgram: SystemProgram.programId,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           tokenProgram: TOKEN_2022_PROGRAM_ID,
-          rent: SYSVAR_RENT_PUBKEY,
           ['event_authority']: eventAuthorityPDA,
           program: pumpProgram.programId,
         })
