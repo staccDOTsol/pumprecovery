@@ -27,10 +27,11 @@ tmp/
 cache/
 
 # Large / vendored libs that bloat (additive for these projects)
-**/charting_library/
-**/*-standalone.js
-**/*.data
-**/public/tradingview/**
+# **/charting_library/   # now included for TradingView charts (cloned)
+# **/*-standalone.js
+# **/*.data
+# **/public/tradingview/**  # now included for charting library
+
 
 # Keep the important stuff (json + keys)
 !keys/**/*
