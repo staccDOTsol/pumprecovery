@@ -348,9 +348,9 @@ export class EventListenerService {
     if (this.configService.get('solanaGeyserRpc')) {
       this.startMainnetListenerWithReconnect(CommitmentLevel.CONFIRMED);
       this.startMainnetListenerWithReconnect(CommitmentLevel.FINALIZED);
-    } else {
-      this.startDevnetListener();
     }
+    // Always start RPC onLogs as backup (reliable for catching events even if geyser flakes)
+    this.startDevnetListener();
 
     // const grpc = require('@grpc/grpc-js');
     // const protoLoader = require('@grpc/proto-loader');
