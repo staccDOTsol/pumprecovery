@@ -84,7 +84,7 @@ export function Wallet() {
             if (requiresLogin) {
               return (
                 <div className="grid gap-4 justify-items-center">
-                  <div>Sign in to Pump</div>
+                  <div>Sign in to stacc</div>
 
                   {loginLoading ? (
                     <div className="flex gap-4 py-2 px-4 border border-white rounded-full w-fit">

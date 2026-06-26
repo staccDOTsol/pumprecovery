@@ -38,38 +38,47 @@ const saveJson = async (json: any) => {
   return pinata.pinJSONToIPFS(json, options);
 };
 
-export const POST = async (req: Request, res: NextApiResponse) => {
-  const formData = await req.formData();
+export const POST = async (req: Request) => {
+  try {
+    const formData = await req.formData();
 
-  const file = formData.get("file");
-  const name = formData.get("name");
-  const symbol = formData.get("symbol");
-  const description = formData.get("description");
-  const twitter = formData.get("twitter");
-  const telegram = formData.get("telegram");
-  const website = formData.get("website");
-  const showName = formData.get("showName") === "false" ? false : true;
+    const file = formData.get("file");
+    const name = formData.get("name");
+    const symbol = formData.get("symbol");
+    const description = formData.get("description");
+    const twitter = formData.get("twitter");
+    const telegram = formData.get("telegram");
+    const website = formData.get("website");
+    const showName = formData.get("showName") === "false" ? false : true;
 
-  const response = await saveFile(file);
-  const { IpfsHash: imageIpfsHash } = response;
+    if (!file) {
+      return Response.json({ error: "no file" }, { status: 400 });
+    }
 
-  const metadata: any = {
-    name,
-    symbol,
-    description,
-    image: `https://cf-ipfs.com/ipfs/${imageIpfsHash}`,
-    showName,
-    createdOn: "https://pump.fun",
-  };
+    const response = await saveFile(file);
+    const { IpfsHash: imageIpfsHash } = response;
 
-  if (twitter) metadata.twitter = twitter;
-  if (telegram) metadata.telegram = telegram;
-  if (website) metadata.website = website;
+    const metadata: any = {
+      name,
+      symbol,
+      description,
+      image: `https://cf-ipfs.com/ipfs/${imageIpfsHash}`,
+      showName,
+      createdOn: "https://pump.fun",
+    };
 
-  const { IpfsHash: metaplexIpfsHash } = await saveJson(metadata);
+    if (twitter) metadata.twitter = twitter;
+    if (telegram) metadata.telegram = telegram;
+    if (website) metadata.website = website;
 
-  return Response.json({
-    metadata,
-    metadataUri: `https://cf-ipfs.com/ipfs/${metaplexIpfsHash}`,
-  });
+    const { IpfsHash: metaplexIpfsHash } = await saveJson(metadata);
+
+    return Response.json({
+      metadata,
+      metadataUri: `https://cf-ipfs.com/ipfs/${metaplexIpfsHash}`,
+    });
+  } catch (e: any) {
+    console.error("ipfs upload failed", e);
+    return Response.json({ error: e?.message || "ipfs upload failed" }, { status: 500 });
+  }
 };

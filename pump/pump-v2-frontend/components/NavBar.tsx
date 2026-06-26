@@ -34,7 +34,7 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
           <Link href="/board">
             <Image
               src="/logo.png"
-              alt="Pump"
+              alt="stacc.art"
               width={25}
               height={25}
               className="mr-4"
@@ -72,9 +72,28 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
                 [telegram]
               </a>
 
+              <a
+                className="text-sm text-white hover:underline hover:font-bold"
+                href="https://github.com/staccDOTsol/pumprecovery"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                [github]
+              </a>
+
               {isClient && <HowItWorks />}
             </div>
           </div>
+
+          {/* CA in header/nav */}
+          <a
+            className="text-xs text-yellow-400 hover:underline ml-2 hidden md:inline"
+            href="https://pump.fun/coin/Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            CA: Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump
+          </a>
 
           <div className="hidden md:flex gap-2">
             <LatestTrade />
@@ -134,6 +153,33 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
       </div>
 
       <main className="h-full">{children}</main>
+
+      {/* Disclaimer + GitHub at bottom of page - rebrand to stacc.art demo */}
+      <footer className="p-2 text-center text-xs text-gray-400 border-t border-gray-800 mt-4">
+        <div className="max-w-2xl mx-auto">
+          <strong>stacc.art</strong> — This is only a reference/historical/educational demo implementation of a pump.fun-style bonding curve.
+          Not affiliated with or endorsed by pump.fun.
+          <br />
+          Reference CA:{" "}
+          <a
+            href="https://pump.fun/coin/Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-white"
+          >
+            Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump
+          </a>
+          {" | "}
+          <a
+            href="https://github.com/staccDOTsol/pumprecovery"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-white"
+          >
+            GitHub
+          </a>
+        </div>
+      </footer>
 
       {/* <Chatbox /> */}
     </div>

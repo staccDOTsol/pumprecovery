@@ -199,7 +199,7 @@ export class SeedPoolService {
     const wallet = new Wallet(migrationAuthorityKeyPair);
     const anchorProvider = new AnchorProvider(connection, wallet, {});
     const pumpProgram = new Program(
-      pumpIdl as Idl,
+      pumpIdl as unknown as Idl,
       new PublicKey(this.configService.get('pumpProgramId') as string),
       anchorProvider,
     );

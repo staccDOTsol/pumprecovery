@@ -349,7 +349,7 @@ export default function Create() {
       // create token with metadata link
       const anchorProvider = new AnchorProvider(connection, wallet, {});
       const pumpProgram = new Program(
-        pumpIdl as Idl,
+        pumpIdl as unknown as Idl,
         new PublicKey(process.env.NEXT_PUBLIC_PUMP_PROGRAM_ID as string),
         anchorProvider
       );
@@ -397,8 +397,6 @@ export default function Create() {
           bondingCurve: bondingCurvePDA,
           associatedBondingCurve: associatedBondingCurveAccount,
           global: globalPDA,
-          mplTokenMetadata,
-          metadata: metadataPDA,
         })
         .signers([mintKeyPair])
         .instruction();

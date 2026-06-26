@@ -18,7 +18,7 @@ pub mod native_mint {
 pub mod config_feature {
     pub mod withdraw_authority {
         use anchor_lang::declare_id;
-        declare_id!("5PXxuZkvftsg5CAGjv5LL5tEtvBRskdx1AAjxw8hK2Qx");
+        declare_id!("DwsTaCR5d1WBFmcG9Tx432v1YWGyqz9zGzCX6TfxpC2C");
     }
 }
 

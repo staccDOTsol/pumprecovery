@@ -7,7 +7,6 @@ import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { lamportsToSol } from "@/utils/lamportsToSol";
 import { humanizeTokenAmount } from "@/utils/humanizeTokenAmount";
 import BN from "bn.js";
-import { ResolutionString } from "@/public/tradingview/charting_library";
 interface Candlestick {
   timestamp: number;
   low: number;
@@ -131,7 +130,7 @@ const Chart: React.FC<ChartProps> = ({
       const TradingView = window.TradingView;
 
       if (!socket) return;
-      const widgetOptions = {
+      const widgetOptions: any = {
         debug: true,
         symbol: symbol,
         has_intraday: true,
@@ -145,7 +144,7 @@ const Chart: React.FC<ChartProps> = ({
           { text: "5m", resolution: "5", description: "5 Minutes" },
           { text: "15m", resolution: "15", description: "15 Minutes" },
         ],
-        interval: "5" as ResolutionString,
+        interval: "5" as any,
         favorites: {
           intervals: ["1S", "5", "15"],
         },
@@ -328,7 +327,7 @@ const Chart: React.FC<ChartProps> = ({
           "scalesProperties.showRightScale": true, // Enable right scale
         },
       };
-      const chart = new TradingView.widget(widgetOptions);
+      const chart = new TradingView.widget(widgetOptions as any);
       return () => {
         chart.remove();
       };

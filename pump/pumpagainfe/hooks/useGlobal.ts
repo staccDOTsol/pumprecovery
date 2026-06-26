@@ -27,7 +27,7 @@ export const useGlobal = () => {
     // construct anchor program interface
     const anchorProvider = new AnchorProvider(connection, null as any, {});
     const pumpProgram = new Program(
-      pumpIdl as Idl,
+      pumpIdl as unknown as Idl,
       new PublicKey(process.env.NEXT_PUBLIC_PUMP_PROGRAM_ID as string),
       anchorProvider
     );

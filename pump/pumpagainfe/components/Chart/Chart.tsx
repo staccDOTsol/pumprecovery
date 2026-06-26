@@ -300,7 +300,9 @@ let lastCandle: Candlestick | null = null;
           "scalesProperties.showRightScale": true, // Enable right scale
         },
       };
-      const chart = new TradingView.widget(widgetOptions);
+
+      const widgetOptionsAny: any = widgetOptions;
+      const chart = new TradingView.widget(widgetOptionsAny);
       return () => {
         chart.remove();
       };

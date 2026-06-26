@@ -25,7 +25,6 @@ import {
   getAccount,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { MPL_TOKEN_METADATA_PROGRAM_ID } from "@metaplex-foundation/mpl-token-metadata";
 import { useToast } from "@/components/ui/use-toast";
 import { Oval } from "react-loader-spinner";
 import { ErrorMessage } from "@/components/ErrorMessage";
@@ -349,7 +348,7 @@ export default function Create() {
       // create token with metadata link
       const anchorProvider = new AnchorProvider(connection, wallet, {});
       const pumpProgram = new Program(
-        pumpIdl as Idl,
+        pumpIdl as unknown as Idl,
         new PublicKey(process.env.NEXT_PUBLIC_PUMP_PROGRAM_ID as string),
         anchorProvider
       );
@@ -371,20 +370,9 @@ export default function Create() {
         bondingCurvePDA,
         true
       );
-      const mplTokenMetadata = new PublicKey(
-        MPL_TOKEN_METADATA_PROGRAM_ID.toString()
-      );
       const [globalPDA] = PublicKey.findProgramAddressSync(
         [utils.bytes.utf8.encode("global")],
         pumpProgram.programId
-      );
-      const [metadataPDA] = PublicKey.findProgramAddressSync(
-        [
-          utils.bytes.utf8.encode("metadata"),
-          mplTokenMetadata.toBuffer(),
-          mintKeyPair.publicKey.toBuffer(),
-        ],
-        mplTokenMetadata
       );
 
       const instructions: TransactionInstruction[] = [];
@@ -397,8 +385,6 @@ export default function Create() {
           bondingCurve: bondingCurvePDA,
           associatedBondingCurve: associatedBondingCurveAccount,
           global: globalPDA,
-          mplTokenMetadata,
-          metadata: metadataPDA,
         })
         .signers([mintKeyPair])
         .instruction();

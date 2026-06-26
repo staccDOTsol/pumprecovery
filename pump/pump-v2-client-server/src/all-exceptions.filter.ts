@@ -21,11 +21,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
     console.error(exception);
 
     // Handle the error asynchronously
+    const message =
+      exception instanceof HttpException
+        ? exception.message
+        : 'Internal server error';
+
     response.status(status).json({
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
-      message: 'Internal server error',
+      message,
     });
   }
 }

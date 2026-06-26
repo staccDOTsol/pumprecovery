@@ -13,9 +13,12 @@ import { ProfileProvider } from "@/providers/ProfileProvider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Pump",
+  title: "stacc.art",
   description:
-    "Launch a coin that is instantly tradeable without having to seed liquidity.",
+    "stacc.art - reference/historical/educational demo implementation of pump.fun style bonding curve. Not affiliated. Reference: https://pump.fun/coin/Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export default function RootLayout({
@@ -24,14 +27,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <SocketProvider>
         <RpcUrlProvider>
           <SolanaWalletProvider>
             <ProfileProvider>
               <PriorityFeeProvider>
                   <IpfsPrefixProvider>
-                    <body className={`${inter.className} bg-primary`}>
+                    <body className={`${inter.className} bg-primary`} suppressHydrationWarning>
                       {children} <Analytics />
                     </body>
                   </IpfsPrefixProvider>

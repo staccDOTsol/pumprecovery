@@ -273,7 +273,8 @@ const Chart: React.FC<ChartProps> = ({
         },
       };
 
-      const chart = new TradingView.widget(widgetOptions);
+      const widgetOptionsAny: any = widgetOptions;
+      const chart = new TradingView.widget(widgetOptionsAny);
 
       return () => {
         chart.remove();

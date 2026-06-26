@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useState } from "react";
+// @ts-ignore - bs58 types/module resolution in pnpm/Next build
 import base58 from "bs58";
 import { Oval } from "react-loader-spinner";
 

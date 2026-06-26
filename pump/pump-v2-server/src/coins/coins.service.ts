@@ -218,7 +218,7 @@ export class CoinsService {
     const wallet = null;
     const anchorProvider = new AnchorProvider(connection, wallet as any, {});
     const pumpProgram = new Program(
-      pumpIdl as Idl,
+      pumpIdl as unknown as Idl,
       new PublicKey(this.configService.get<string>('pumpProgramId')),
       anchorProvider,
     );
