@@ -30,6 +30,7 @@ import {
 } from '@raydium-io/raydium-sdk';
 import bs58 from 'bs58';
 import {
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
   createBurnInstruction,
@@ -327,6 +328,7 @@ export class SeedPoolService {
       mint,
       migrationAuthorityKeyPair.publicKey,
       false,
+      TOKEN_2022_PROGRAM_ID,
     );
 
     await this.sendTransactionWithRetry(
@@ -371,6 +373,7 @@ export class SeedPoolService {
       mint,
       bondingCurvePDA,
       true,
+      TOKEN_2022_PROGRAM_ID,
     );
     await this.sendTransactionWithRetry(
       `withdraw from bonding curve ${mint.toBase58()}`,

@@ -211,17 +211,15 @@ export class EventListenerService {
     }
   }
 
-  async startMainnetListener(commitment: CommitmentLevel) {
-    console.log('Starting mainnet listener');
+  private async startGeyserStreamOnce(commitment: CommitmentLevel): Promise<never> {
+    console.log(`Geyser stream starting for ${commitment}...`);
 
     const client = new Client(this.configService.get('solanaGeyserRpc'), '', {
-      'grpc.max_receive_message_length': 64 * 1024 * 1024, // 64MiB
+      'grpc.max_receive_message_length': 64 * 1024 * 1024,
     });
 
-    // Subscribe for events
     const stream = await client.subscribe();
 
-    // Create subscribe request based on provided arguments.
     const id = Math.floor(Math.random() * 100_000);
     const defaultRequest = {
       accounts: {},
@@ -253,47 +251,50 @@ export class EventListenerService {
       ping: { id } as any,
     };
 
-    // Handle updates
-    stream.on('data', (data) => {
-      if (data.ping) {
-        console.log('ping', data, pingRequest);
-        stream.write(pingRequest);
-        return;
+    return new Promise((_, reject) => {
+      stream.on('data', (data) => {
+        if (data.ping) {
+          stream.write(pingRequest);
+          return;
+        }
+        if (data.transaction) {
+          const logs = data.transaction.transaction.meta.logMessages;
+          const signature = bs58.encode(data.transaction.transaction.signature);
+          const slot = Number(data.transaction.slot);
+          this.handleLogs({ logs, signature }, { slot }, commitment);
+        }
+      });
+
+      stream.on('ping', () => {});
+
+      const die = (err?: any) => {
+        try { stream.destroy(); } catch (e) {}
+        reject(err || new Error('stream closed'));
+      };
+
+      stream.on('error', (err) => {
+        console.error('Geyser grpc error', err);
+        die(err);
+      });
+      stream.on('end', () => die());
+      stream.on('close', () => die());
+
+      stream.write(transactionSubscribeRequest, (err) => {
+        if (err) die(err);
+      });
+    });
+  }
+
+  async startMainnetListenerWithReconnect(commitment: CommitmentLevel) {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        await this.startGeyserStreamOnce(commitment);
+      } catch (e) {
+        console.error(`Geyser ${commitment} stream died, reconnecting in 5s...`, (e as Error)?.message || e);
       }
-
-      if (data.transaction) {
-        // console.log('data', data.transaction.transaction.meta.logMessages);
-
-        // const objectAsString = JSON.stringify(data);
-        // const bytes = new TextEncoder().encode(objectAsString).length;
-        // const time = Math.floor(Date.now() / 1000);
-
-        // if (!resss[time]) {
-        //   console.log('processed', resss[time - 1]);
-        //   if (resss[time - 1] > maxValue) maxValue = resss[time - 1];
-        //   console.log('max', maxValue);
-        // }
-        // resss[time] = resss[time] ? resss[time] + bytes : bytes;
-        // console.log(resss);
-
-        // console.log('bytes', data[time]);
-        const logs = data.transaction.transaction.meta.logMessages;
-        const signature = bs58.encode(data.transaction.transaction.signature);
-        const slot = Number(data.transaction.slot);
-        this.handleLogs({ logs, signature }, { slot }, commitment);
-      }
-    });
-
-    stream.on('ping', (data) => {
-      console.log('ping', data);
-    });
-
-    stream.on('error', (err) => {
-      console.log('grpc error', err);
-    });
-
-    // Send subscribe request
-    stream.write(transactionSubscribeRequest, (err) => {});
+      await new Promise((r) => setTimeout(r, 5000));
+    }
   }
 
   async startDevnetListener() {
@@ -343,10 +344,10 @@ export class EventListenerService {
   }
 
   async startLogsListener() {
-    console.log(this.configService.get('solanaGeyserRpc'));
+    console.log('Geyser RPC:', this.configService.get('solanaGeyserRpc'));
     if (this.configService.get('solanaGeyserRpc')) {
-      this.startMainnetListener(CommitmentLevel.CONFIRMED);
-      this.startMainnetListener(CommitmentLevel.FINALIZED);
+      this.startMainnetListenerWithReconnect(CommitmentLevel.CONFIRMED);
+      this.startMainnetListenerWithReconnect(CommitmentLevel.FINALIZED);
     } else {
       this.startDevnetListener();
     }
