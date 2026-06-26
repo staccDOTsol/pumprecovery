@@ -73,14 +73,12 @@ export class CoinsService {
   }
 
   async createCoin(event: any, slot: number, signature: string, tx: any) {
-    console.log('creating coin');
-    const { uri, mint, bondingCurve, user } = event;
+    console.log('creating coin - reindex improved ' + new Date().toISOString());
+    const { name: eventName, symbol: eventSymbol, uri, mint, bondingCurve, user } = event;
     const timestamp = tx ? tx.blockTime * 1000 : Date.now();
 
     const fetchIpfsData = () => {
-      return fetch(
-        "https://cf-ipfs.com/ipfs/QmW8W35ggYeuf3kx7E3zu6NnBwm5Rt3xZbm9ku3nmLgnVc"
-      ).then((res) => res.json());
+      return fetch(uri).then((res) => res.json());
     };
 
     const fetchIpfsDataWithRetry = async () => {
@@ -103,25 +101,22 @@ export class CoinsService {
     };
 
     try {
-      // fetch the metadata
-      let data;
+      // fetch the metadata from the uri in the event (name/symbol already in event)
+      let data: any = {};
       try {
         data = await fetchIpfsDataWithRetry();
       } catch (error) {
         console.log(
-          'failed to fetch ipfs data, cannot create coin',
+          'failed to fetch ipfs data for coin, using name/symbol from event only',
           error,
           event,
         );
-
-        throw new Error(error);
+        // continue with defaults
       }
 
       const {
-        name,
-        symbol,
-        description,
-        image,
+        description = '',
+        image = '',
         telegram,
         twitter,
         website,
@@ -138,7 +133,7 @@ export class CoinsService {
         initial_virtual_sol_reserves,
         initial_virtual_token_reserves,
         token_total_supply,
-      } = await this.globalParamsService.getGlobalParamsAtTimestamp(1711112108000);
+      } = await this.globalParamsService.getGlobalParamsAtTimestamp(timestamp);
 
       const market_cap = await this.calculateMarketCap(
         initial_virtual_sol_reserves.toString(),
@@ -147,8 +142,8 @@ export class CoinsService {
       );
 
       await this.databaseService.createCoin({
-        name,
-        symbol,
+        name: eventName,
+        symbol: eventSymbol,
         description: description && description.replace(/[\r\n]+/g, ' '),
         image_uri: image,
         metadata_uri: uri,
