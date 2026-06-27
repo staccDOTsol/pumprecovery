@@ -1,57 +1,47 @@
-# pumprecovery
+# stacc — open-source Solana launchpad (mirror-ready)
 
-Machine: staccs-MacBook-Pro.local
-Date: 2026-06-24
-User: staccoverflow
+An open-source bonding-curve token launchpad on Solana. Every trade is an atomic,
+same-slot, un-sandwichable bundle whose fees flow into a flywheel: **1/3 to a
+3-deep referral tree, 1/3 to permanent Orca liquidity, 1/3 to buy & burn**.
 
-## What was copied (paths only, relative to recovery/)
+The same build runs on the canonical site and on any number of **mirrors** — the
+brand, default referrer, and backends are all env-driven, so anyone can spin up
+their own mirror in one click.
 
-### Keys (Solana private keys are included in this private repo)
-- keys/discovered/staccs-MBP-20240624-7i.json
-- keys/discovered/staccs-MBP-20240624-dummy2.json
-- keys/discovered/staccs-MBP-20240624-id.json
-- (originals also present in top-json/ and solana-config/)
+> ⚠ **Mirrors are untrusted.** Treat any mirror like a Piratebay mirror: shop
+> around, use burner wallets, and never more than you can afford to lose. This
+> code is open-source and there's no assurance a given deploy hasn't been
+> nefariously modified. The live mirror index is **[stacc.show](https://stacc.show)**.
+>
+> _You managed to get Google to b& stacc.art: I raise you a game of whack-a-mole._
 
-### Top-level JSONs from ~
-- top-json/7i.json
-- top-json/dummy2.json
-- top-json/mainnet.json
-- top-json/package-lock.json
-- top-json/package.json
-- top-json/three_days.json
-- top-json/today.json
-- top-json/yesterday.json
+## Layout
 
-### Solana config
-- solana-config/id.json
-- solana-config/cli/config.yml
-- solana-config/install/config.yml
+| Path | What |
+| --- | --- |
+| [`pump/pump-v2-frontend`](pump/pump-v2-frontend) | The Next.js launchpad UI. **[Deploy your own mirror →](pump/pump-v2-frontend/README.md)** |
+| [`pump/stacc-show`](pump/stacc-show) | `stacc.show` — live mirror index + failover redirector |
+| `pump/pump-v2-client-server` | Shared NestJS backend (auth, coins, trades, mirror indexer) |
+| `pump/pump-contracts-solana` | The on-chain Anchor program (`67LWrtDBPyZqS7SzCYZWBLgPBqZAG94GTfMWEBG2fnuV`) |
 
-### Pump / related checkouts copied to pump/
-- editfrontend
-- kothanimate
-- openai-pump-fun
-- pump-amm
-- pump-cache-server
-- pump-contracts-solana
-- pump-meta-dao-fe
-- pump-real-amm
-- pump-v2-amm
-- pump-v2-client-server
-- pump-v2-frontend
-- pump-v2-metrics-server
-- pump-v2-server
-- pump-v2-supabase
-- pumpagainfe
-- pumpfut
-- pumpitydooda
-- pumpitydumpity
-- rune-pump
+## Deploy your own mirror (1 click)
 
-## Notes
-- Recovered from one machine as part of multi-machine private repo strategy.
-- Copies used cp -a / rsync -a --update (with excludes for node_modules/target/.next/dist/build to keep recovery practical).
-- Original files untouched.
-- .gitignore protects against bloat for node_modules etc while keeping json + keys.
-- Large data JSONs (mainnet.json etc) and pump source trees are present locally.
-# pumprecovery
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FstaccDOTsol%2Fpumprecovery&root-directory=pump%2Fpump-v2-frontend&project-name=stacc-mirror&repository-name=stacc-mirror&env=NEXT_PUBLIC_DEFAULT_REFERRER&envDescription=Your%20Solana%20wallet%20%E2%80%94%20earns%20top-of-tree%20referral%20fees%20on%20this%20mirror&envLink=https%3A%2F%2Fgithub.com%2FstaccDOTsol%2Fpumprecovery%2Fblob%2Fmain%2Fpump%2Fpump-v2-frontend%2F.env.example)
+
+It prompts only for `NEXT_PUBLIC_DEFAULT_REFERRER` (your wallet); the shared
+backends are baked in. Once live, your mirror **self-registers** with the index
+(its users hit the shared backend, which records the origin) and shows up on
+[stacc.show](https://stacc.show) with a running tally of its referrer's earnings.
+
+Full mirror setup + what's secret vs. shareable:
+[`pump/pump-v2-frontend/README.md`](pump/pump-v2-frontend/README.md).
+
+## How the mirror index works
+
+- Mirrors don't need to be added by hand. The shared backend records every live
+  mirror origin (the browser sets the `Origin` header on sign-in / page-load
+  pings) plus the mirror's configured top-level referrer.
+- `stacc.show` reads that live list, health-checks each mirror, and 302-forwards
+  deep links (`stacc.show/<mint>?ref=…`) to a working one — preserving path + ref.
+
+Not affiliated with or endorsed by pump.fun.
