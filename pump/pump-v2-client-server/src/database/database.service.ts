@@ -999,4 +999,49 @@ export class DatabaseService {
       return null;
     }
   }
+
+  /**
+   * Self-registering mirror index. A mirror's browser sets the Origin header on
+   * its cross-origin requests (ping / sign-in), giving us a trustworthy "this
+   * mirror is live" signal. Atomic upsert via record_mirror(): inserts or bumps
+   * last_seen + hits, and records the mirror's self-reported default referrer.
+   */
+  async recordMirror(origin: string, referrer?: string | null) {
+    try {
+      if (!origin || !/^https?:\/\/[^\s/]+$/.test(origin)) return;
+      const normalized = origin.replace(/\/+$/, '');
+      const p_referrer =
+        referrer && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(referrer)
+          ? referrer
+          : null;
+      const { error } = await this.supabase.rpc('record_mirror', {
+        p_origin: normalized,
+        p_referrer,
+      });
+      if (error) throw error;
+    } catch (e) {
+      console.error('Error recording mirror:', e);
+    }
+  }
+
+  async getMirrors() {
+    try {
+      const { data, error } = await this.supabase
+        .from('mirrors')
+        .select(
+          'origin, default_referrer, first_seen, last_seen, hits, verified',
+        )
+        .order('last_seen', { ascending: false })
+        .limit(200);
+
+      if (error) {
+        throw error;
+      }
+
+      return data || [];
+    } catch (e) {
+      console.error('Error fetching mirrors:', e);
+      return [];
+    }
+  }
 }

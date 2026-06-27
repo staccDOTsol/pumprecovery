@@ -26,6 +26,7 @@ import { JitoTipsModule } from './jito-tips/jito-tips.module';
 import { DatabaseModule } from './database/database.module';
 import { FollowingService } from './following/following.service';
 import { FollowingModule } from './following/following.module';
+import { MirrorsModule } from './mirrors/mirrors.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { FollowingModule } from './following/following.module';
     JitoTipsModule,
     DatabaseModule,
     FollowingModule,
+    MirrorsModule,
   ],
   controllers: [AppController],
   providers: [

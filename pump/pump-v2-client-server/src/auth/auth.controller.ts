@@ -4,16 +4,19 @@ import {
   Get,
   Post,
   Query,
-  Request,
-  UseGuards,
+  Req,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { AuthService } from './auth.service';
-import { AuthGuard } from '@nestjs/passport';
 import { LoginDto } from './dto/login.dto';
+import { DatabaseService } from 'src/database/database.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private readonly db: DatabaseService,
+  ) {}
 
   @Get('/is-admin')
   async isAdmin(@Query('address') address) {
@@ -21,7 +24,10 @@ export class AuthController {
   }
 
   @Post('/login')
-  async login(@Body() login: LoginDto) {
+  async login(@Body() login: LoginDto, @Req() req: Request) {
+    // A real sign-in is a strong "this mirror is live" signal — record its origin.
+    const origin = (req.headers?.origin as string) || '';
+    if (origin) this.db.recordMirror(origin).catch(() => {});
     return this.authService.login(login);
   }
 }

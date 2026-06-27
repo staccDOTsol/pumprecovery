@@ -21,27 +21,17 @@ async function bootstrap() {
 
   app.set('trust proxy', true);
 
-  const allowedOrigins = [
-    'https://stacc.art',
-    'https://www.stacc.art',
-    'https://pump.fun',
-    'https://www.pump.fun',
-    'http://localhost:3000',
-  ];
-
+  // Mirrors run on arbitrary domains and all share this backend, so we reflect
+  // any Origin. This is safe here because auth is via the Authorization header
+  // (Bearer JWT in localStorage), NOT cookies — there's no ambient credential a
+  // cross-origin site could abuse. Every live mirror origin that hits us is also
+  // recorded by the indexer (see MirrorsController / record_mirror).
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
+    origin: (origin, callback) => callback(null, true),
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   });
-  // CORS updated for stacc.art frontend - force redeploy 20260626a
 
   await app.listen(process.env.PORT || 8080);
 }
