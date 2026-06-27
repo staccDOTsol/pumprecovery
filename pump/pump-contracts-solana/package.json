@@ -18,6 +18,7 @@
         "@solana/buffer-layout": "^4.0.1",
         "@solana/spl-token": "^0.3.10",
         "@solana/spl-token-metadata": "^0.1.4",
+        "@solana/web3.js": "^1.98.4",
         "chai-almost": "^1.0.1",
         "decimal.js": "^10.6.0"
     },
