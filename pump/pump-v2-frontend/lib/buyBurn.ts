@@ -787,6 +787,288 @@ const ASSOCIATED_TOKEN_PROGRAM = ASSOCIATED_TOKEN_PROGRAM_ID;
 const tokenProgramForMint = (mint: PublicKey) =>
   mint.equals(WSOL_MINT) || mint.equals(USDC_MINT) ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
 
+
+/**
+ * Derive the PDA for the LP owner (accounts that hold position NFTs/ATAs for liquidity).
+ *
+ * @param {PublicKey} memeMint - The mint address of the meme token
+ * @returns {PublicKey} - The derived PDA for the LP owner with bump ignored (first item)
+ */
+export function deriveLpOwner(memeMint: PublicKey): PublicKey {
+  // The LP owner PDA is derived as: [b"lp_owner", meme_mint] with PUMP_PROGRAM
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("lp_owner"), memeMint.toBuffer()],
+    PUMP_PROGRAM
+  )[0];
+}
+
+/**
+ * Write a 16-bit unsigned integer (u16) in little-endian to the given buffer at a specific offset.
+ * @param {Buffer} buf - The buffer to write into.
+ * @param {number} value - The 16-bit unsigned integer value to write.
+ * @param {number} offset - The offset at which to write the value.
+ */
+export function writeU16LE(buf: Buffer, value: number, offset: number) {
+  buf.writeUInt16LE(value, offset);
+}
+
+/**
+ * Reads a 16-bit unsigned integer (u16) in little-endian from the given buffer at a specific offset.
+ * @param {Buffer} buf - The buffer to read from.
+ * @param {number} offset - The offset to read from.
+ * @returns {number} - The 16-bit unsigned integer.
+ */
+export function readU16LE(buf: Buffer, offset: number) {
+  return buf.readUInt16LE(offset);
+}
+
+export function u16le(buf: Buffer, value?: number, offset: number = 0): void {
+  if (typeof value === "number") {
+    buf.writeUInt16LE(value, offset);
+  } else {
+    // The function is now void type, so only perform action if value provided
+  }
+}
+
+/**
+ * Build a standalone `open_lp_position` ix (+ lp_owner ATA setup) that opens a
+ * FRESH, in-range, program-owned USDC/meme Orca position for `memeMint` (or
+ * HOUSE/meme for HOUSE version), for the "init the position if none valid
+ * before broadcasting" path. The position NFT is owned by the `lp_owner`
+ * PDA (locked forever); `funder` (the trader) pays rent.
+ *
+ * The range is the SAME buffered+wide single-sided USDC/HOUSE placement as
+ * the keeper script, so the returned `position` is immediately valid for the
+ * `add_liq` deposit in the same bundle.
+ *
+ * Returns null when the USDC/meme whirlpool doesn't exist (can't open — caller just
+ * skips add_liq). This tx must be sent + confirmed BEFORE the bundle so add_liq has
+ * a real position to deposit into; sign it with the trader wallet AND `positionMint`.
+ */
+export async function buildOpenUsdcLpPosition(
+  connection: Connection,
+  funder: PublicKey,
+  memeMint: PublicKey
+): Promise<{
+  setupIxs: TransactionInstruction[];
+  positionMint: Keypair;
+  position: VenuePosition;
+} | null> {
+  const whirlpool = deriveWhirlpool(USDC_MINT, memeMint, 64);
+  const info = await connection.getAccountInfo(whirlpool);
+  if (!info || !info.owner.equals(ORCA_PROGRAM) || info.data.length < 245) return null;
+  const d = Buffer.from(info.data);
+  const tickSpacing = d.readUInt16LE(41);
+  const tickCurrent = d.readInt32LE(81);
+  const tokenMintA = new PublicKey(d.subarray(101, 133));
+  const tokenVaultA = new PublicKey(d.subarray(133, 165));
+  const tokenMintB = new PublicKey(d.subarray(181, 213));
+  const tokenVaultB = new PublicKey(d.subarray(213, 245));
+
+  // Buffered + wide single-sided USDC range (1-array buffer, 4-array width).
+  const span = tickSpacing * 88;
+  const quoteIsA = tokenMintA.equals(USDC_MINT);
+  let tickLowerIndex: number;
+  let tickUpperIndex: number;
+  if (quoteIsA) {
+    const base = Math.ceil(tickCurrent / tickSpacing) * tickSpacing;
+    tickLowerIndex = base + span;
+    tickUpperIndex = tickLowerIndex + 4 * span;
+  } else {
+    const base = Math.floor(tickCurrent / tickSpacing) * tickSpacing;
+    tickUpperIndex = base - span;
+    tickLowerIndex = tickUpperIndex - 4 * span;
+  }
+  const startLower = Math.floor(tickLowerIndex / span) * span;
+
+  // Now use same flow as buildOpenSolLpPosition
+  const positionMint = Keypair.generate();
+  const lpOwner = deriveLpOwner(memeMint); // locked ownership PDA
+  const userAtaA = getAssociatedTokenAddressSync(tokenMintA, funder, true, tokenProgramForMint(tokenMintA));
+  const userAtaB = getAssociatedTokenAddressSync(tokenMintB, funder, true, tokenProgramForMint(tokenMintB));
+  const ownerAtaA = getAssociatedTokenAddressSync(tokenMintA, lpOwner, true, tokenProgramForMint(tokenMintA));
+  const ownerAtaB = getAssociatedTokenAddressSync(tokenMintB, lpOwner, true, tokenProgramForMint(tokenMintB));
+  const setupIxs: TransactionInstruction[] = [
+    createAssociatedTokenAccountIdempotentInstruction(funder, ownerAtaA, lpOwner, tokenMintA, tokenProgramForMint(tokenMintA)),
+    createAssociatedTokenAccountIdempotentInstruction(funder, ownerAtaB, lpOwner, tokenMintB, tokenProgramForMint(tokenMintB)),
+  ];
+  // Compose open_lp_position instruction
+  const openLpIx = new TransactionInstruction({
+    programId: PUMP_PROGRAM,
+    keys: [
+      { pubkey: funder, isSigner: true, isWritable: true },
+      { pubkey: positionMint.publicKey, isSigner: true, isWritable: true },
+      { pubkey: lpOwner, isSigner: false, isWritable: false },
+      { pubkey: whirlpool, isSigner: false, isWritable: true },
+      { pubkey: userAtaA, isSigner: false, isWritable: true },
+      { pubkey: userAtaB, isSigner: false, isWritable: true },
+      { pubkey: ownerAtaA, isSigner: false, isWritable: true },
+      { pubkey: ownerAtaB, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: tokenProgramForMint(tokenMintA), isSigner: false, isWritable: false },
+      { pubkey: tokenProgramForMint(tokenMintB), isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: ORCA_PROGRAM, isSigner: false, isWritable: false }
+    ],
+    data: Buffer.concat([
+      DISC_OPEN_LP_POSITION,
+      Buffer.from(Uint16Array.of(tickLowerIndex).buffer),
+      Buffer.from(Uint16Array.of(tickUpperIndex).buffer),
+      // Put any additional params here if required by your open_lp_position CPI
+    ])
+  });
+
+  setupIxs.push(openLpIx);
+
+  return {
+    setupIxs,
+    positionMint,
+    position: {
+      whirlpool: whirlpool.toString(),
+      position: findPda(
+        [Buffer.from("position"), positionMint.publicKey.toBuffer()],
+        ORCA_PROGRAM
+      ).toString(),
+      positionMint: positionMint.publicKey.toString(),
+      positionTokenAccount: getAssociatedTokenAddressSync(
+        positionMint.publicKey,
+        deriveLpOwner(memeMint),
+        true,
+        TOKEN_PROGRAM_ID
+      ).toString(),
+      tokenMintA: tokenMintA.toString(),
+      tokenVaultA: tokenVaultA.toString(),
+      tokenMintB: tokenMintB.toString(),
+      tokenVaultB: tokenVaultB.toString(),
+      tickArrayLower: deriveTickArrayPda(whirlpool, tickLowerIndex).toString(),
+      tickArrayUpper: deriveTickArrayPda(whirlpool, tickUpperIndex).toString(),
+      tokenProgramA: tokenProgramForMint(tokenMintA).toString(),
+      tokenProgramB: tokenProgramForMint(tokenMintB).toString(),
+      tokenOwnerAccountA: getAssociatedTokenAddressSync(tokenMintA, deriveLpOwner(memeMint), true, tokenProgramForMint(tokenMintA)).toString(),
+      tokenOwnerAccountB: getAssociatedTokenAddressSync(tokenMintB, deriveLpOwner(memeMint), true, tokenProgramForMint(tokenMintB)).toString(),
+      tickLowerIndex,
+      tickUpperIndex
+    }
+  };
+}
+
+/**
+ * Build a standalone `open_lp_position` ix (+ lp_owner ATA setup) that opens a
+ * FRESH, in-range, program-owned HOUSE/meme Orca position for `memeMint`, for
+ * the "init the position if none valid before broadcasting" path. Works identically
+ * to buildOpenUsdcLpPosition except uses HOUSE_MINT.
+ *
+ * Returns null when the HOUSE/meme whirlpool doesn't exist (can't open — caller just
+ * skips add_liq). This tx must be sent + confirmed BEFORE the bundle so add_liq has
+ * a real position to deposit into; sign it with the trader wallet AND `positionMint`.
+ */
+export async function buildOpenHouseLpPosition(
+  connection: Connection,
+  funder: PublicKey,
+  memeMint: PublicKey
+): Promise<{
+  setupIxs: TransactionInstruction[];
+  positionMint: Keypair;
+  position: VenuePosition;
+} | null> {
+  const whirlpool = deriveWhirlpool(HOUSE_MINT, memeMint, 64);
+  const info = await connection.getAccountInfo(whirlpool);
+  if (!info || !info.owner.equals(ORCA_PROGRAM) || info.data.length < 245) return null;
+  const d = Buffer.from(info.data);
+  const tickSpacing = d.readUInt16LE(41);
+  const tickCurrent = d.readInt32LE(81);
+  const tokenMintA = new PublicKey(d.subarray(101, 133));
+  const tokenVaultA = new PublicKey(d.subarray(133, 165));
+  const tokenMintB = new PublicKey(d.subarray(181, 213));
+  const tokenVaultB = new PublicKey(d.subarray(213, 245));
+
+  // Buffered + wide single-sided HOUSE range (1-array buffer, 4-array width).
+  const span = tickSpacing * 88;
+  const quoteIsA = tokenMintA.equals(HOUSE_MINT);
+  let tickLowerIndex: number;
+  let tickUpperIndex: number;
+  if (quoteIsA) {
+    const base = Math.ceil(tickCurrent / tickSpacing) * tickSpacing;
+    tickLowerIndex = base + span;
+    tickUpperIndex = tickLowerIndex + 4 * span;
+  } else {
+    const base = Math.floor(tickCurrent / tickSpacing) * tickSpacing;
+    tickUpperIndex = base - span;
+    tickLowerIndex = tickUpperIndex - 4 * span;
+  }
+  const startLower = Math.floor(tickLowerIndex / span) * span;
+
+  const positionMint = Keypair.generate();
+  const lpOwner = deriveLpOwner(memeMint); // locked ownership PDA
+  const userAtaA = getAssociatedTokenAddressSync(tokenMintA, funder, true, tokenProgramForMint(tokenMintA));
+  const userAtaB = getAssociatedTokenAddressSync(tokenMintB, funder, true, tokenProgramForMint(tokenMintB));
+  const ownerAtaA = getAssociatedTokenAddressSync(tokenMintA, lpOwner, true, tokenProgramForMint(tokenMintA));
+  const ownerAtaB = getAssociatedTokenAddressSync(tokenMintB, lpOwner, true, tokenProgramForMint(tokenMintB));
+  const setupIxs: TransactionInstruction[] = [
+    createAssociatedTokenAccountIdempotentInstruction(funder, ownerAtaA, lpOwner, tokenMintA, tokenProgramForMint(tokenMintA)),
+    createAssociatedTokenAccountIdempotentInstruction(funder, ownerAtaB, lpOwner, tokenMintB, tokenProgramForMint(tokenMintB)),
+  ];
+  // Compose open_lp_position instruction
+  const openLpIx = new TransactionInstruction({
+    programId: PUMP_PROGRAM,
+    keys: [
+      { pubkey: funder, isSigner: true, isWritable: true },
+      { pubkey: positionMint.publicKey, isSigner: true, isWritable: true },
+      { pubkey: lpOwner, isSigner: false, isWritable: false },
+      { pubkey: whirlpool, isSigner: false, isWritable: true },
+      { pubkey: userAtaA, isSigner: false, isWritable: true },
+      { pubkey: userAtaB, isSigner: false, isWritable: true },
+      { pubkey: ownerAtaA, isSigner: false, isWritable: true },
+      { pubkey: ownerAtaB, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: tokenProgramForMint(tokenMintA), isSigner: false, isWritable: false },
+      { pubkey: tokenProgramForMint(tokenMintB), isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: ORCA_PROGRAM, isSigner: false, isWritable: false }
+    ],
+    data: Buffer.concat([
+      DISC_OPEN_LP_POSITION,
+      Buffer.from(Uint16Array.of(tickLowerIndex).buffer),
+      Buffer.from(Uint16Array.of(tickUpperIndex).buffer),
+    ])
+  });
+
+  setupIxs.push(openLpIx);
+
+  return {
+    setupIxs,
+    positionMint,
+    position: {
+      whirlpool: whirlpool.toString(),
+      position: findPda(
+        [Buffer.from("position"), positionMint.publicKey.toBuffer()],
+        ORCA_PROGRAM
+      ).toString(),
+      positionMint: positionMint.publicKey.toString(),
+      positionTokenAccount: getAssociatedTokenAddressSync(
+        positionMint.publicKey,
+        deriveLpOwner(memeMint),
+        true,
+        TOKEN_PROGRAM_ID
+      ).toString(),
+      tokenMintA: tokenMintA.toString(),
+      tokenVaultA: tokenVaultA.toString(),
+      tokenMintB: tokenMintB.toString(),
+      tokenVaultB: tokenVaultB.toString(),
+      tickArrayLower: deriveTickArrayPda(whirlpool, tickLowerIndex).toString(),
+      tickArrayUpper: deriveTickArrayPda(whirlpool, tickUpperIndex).toString(),
+      tokenProgramA: tokenProgramForMint(tokenMintA).toString(),
+      tokenProgramB: tokenProgramForMint(tokenMintB).toString(),
+      tokenOwnerAccountA: getAssociatedTokenAddressSync(tokenMintA, deriveLpOwner(memeMint), true, tokenProgramForMint(tokenMintA)).toString(),
+      tokenOwnerAccountB: getAssociatedTokenAddressSync(tokenMintB, deriveLpOwner(memeMint), true, tokenProgramForMint(tokenMintB)).toString(),
+      tickLowerIndex,
+      tickUpperIndex
+    }
+  };
+}
+
 /**
  * Build a standalone `open_lp_position` ix (+ lp_owner ATA setup) that opens a
  * FRESH, in-range, program-owned SOL/meme Orca position for `memeMint`, for the

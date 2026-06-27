@@ -76,6 +76,8 @@ import {
   availableVenues,
   loadBundleLut,
   type Venue,
+  buildOpenUsdcLpPosition,
+  buildOpenHouseLpPosition,
 } from "@/lib/buyBurn";
 import { humanizeWalletError, bundleWalletBlockReason } from "@/lib/walletError";
 
@@ -131,6 +133,7 @@ function addLiqVenueOrder(venues: Venue[]): Venue[] {
  * round-robin order. DO NOT give up if the "default" fails: try all, and, if no venues exist,
  * open a fresh position for one of the three before giving up. Never auto-default to WSOL only.
  */
+
 async function buildAddLiqLeg(opts: {
   connection: Connection;
   publicKey: PublicKey;
