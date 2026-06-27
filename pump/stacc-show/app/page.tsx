@@ -10,6 +10,9 @@ const shortRef = (r: string) => `${r.slice(0, 4)}…${r.slice(-4)}`;
 const usd = (n: number) =>
   "$" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
+const DEPLOY_URL =
+  "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FstaccDOTsol%2Fpumprecovery&root-directory=pump%2Fpump-v2-frontend&project-name=stacc-mirror&repository-name=stacc-mirror&env=NEXT_PUBLIC_DEFAULT_REFERRER&envDescription=Your%20Solana%20wallet%20%E2%80%94%20earns%20top-of-tree%20referral%20fees%20on%20this%20mirror&envLink=https%3A%2F%2Fgithub.com%2FstaccDOTsol%2Fpumprecovery%2Fblob%2Fmain%2Fpump%2Fpump-v2-frontend%2F.env.example";
+
 export default async function Page() {
   const statuses = await statusAll();
   const best = statuses.find((s) => s.ok)?.origin ?? null;
@@ -21,8 +24,56 @@ export default async function Page() {
   const totalEarnings = Object.values(earnings).reduce((a, b) => a + b, 0);
 
   return (
-    <main style={{ maxWidth: 860, margin: "0 auto", padding: "32px 20px" }}>
-      <h1 style={{ fontSize: 28, margin: 0 }}>{REGISTRY_BRAND}</h1>
+    <main style={{ maxWidth: 860, margin: "0 auto", padding: "40px 20px" }}>
+      {/* TOP + BIGGEST: deploy-your-mirror CTA */}
+      <section style={{ marginBottom: 36 }}>
+        <a href={DEPLOY_URL} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+          <h1
+            style={{
+              fontSize: "clamp(40px, 9vw, 72px)",
+              lineHeight: 1.02,
+              margin: 0,
+              color: "#eafff1",
+              letterSpacing: -1.5,
+              fontWeight: 800,
+            }}
+          >
+            Deploy your mirror
+          </h1>
+        </a>
+        <p style={{ fontSize: "clamp(15px, 2.4vw, 20px)", color: "#bcd", margin: "12px 0 20px" }}>
+          your own pump.fun in one click — and your wallet earns the top-of-tree
+          referral fees on every trade that runs through it.
+        </p>
+        <a
+          href={DEPLOY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-block",
+            background: "#7cfc9b",
+            color: "#06210f",
+            fontWeight: 800,
+            fontSize: "clamp(18px, 3vw, 24px)",
+            padding: "16px 30px",
+            borderRadius: 12,
+            textDecoration: "none",
+            boxShadow: "0 0 0 1px #3ddc84, 0 8px 30px rgba(124,252,155,0.18)",
+          }}
+        >
+          Deploy to Vercel → 1 click
+        </a>
+        <div style={{ marginTop: 12, fontSize: 13, color: "#8ab" }}>
+          prompts only for your wallet ·{" "}
+          <a href="https://github.com/staccDOTsol/pumprecovery/blob/main/pump/pump-v2-frontend/README.md">
+            what is this?
+          </a>
+        </div>
+      </section>
+
+      <hr style={{ border: "none", borderTop: "1px solid #1e2a22", margin: "0 0 28px" }} />
+
+      <h2 style={{ fontSize: 24, margin: 0, color: "#cfe9d6" }}>{REGISTRY_BRAND}</h2>
       <p style={{ color: "#9aa", marginTop: 4 }}>
         you&rsquo;re here for the stacc/jare show — it plays across a few mirrors.
         grab a live one below.
