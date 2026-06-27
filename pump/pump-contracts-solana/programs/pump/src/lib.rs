@@ -541,15 +541,24 @@ fn add_liq_house<'info>(
     use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
     use anchor_lang::solana_program::program::invoke_signed;
 
+    // Layout: [pump buy accounts ...][14 Orca deposit accounts][1 orca program].
+    // The PumpSwap `buy_exact_quote_in` needs the FULL SDK account set (26 on mainnet
+    // today): the previous code forwarded a HARDCODED remaining[0..23], dropping the
+    // last 3 the deployed AMM actually reads — it then read garbage and threw Overflow
+    // (custom 0x1787 == pump_amm Overflow, NOT Orca's same-hex InvalidTickArraySequence)
+    // on EVERY HOUSE buy. We now forward ALL pump accounts (everything before the
+    // trailing 14 deposit + 1 orca), exactly like `bundle_buy_burn` forwards its set.
+    // `dep` = the boundary = where the deposit accounts begin = pump-account count.
     if remaining.len() < 38 {
         msg!("add_liq(house): need >=38 remaining accounts; graceful no-op");
         return Ok(false);
     }
+    let dep = remaining.len() - 15;
     if remaining[16].key() != pump_amm::ID {
         msg!("add_liq(house): pump AMM program missing at [16]; graceful no-op");
         return Ok(false);
     }
-    let orca_program = &remaining[37];
+    let orca_program = &remaining[dep + 14];
     if orca_program.key() != orca_whirlpool::ID {
         msg!("add_liq(house): orca program mismatch; graceful no-op");
         return Ok(false);
@@ -563,7 +572,7 @@ fn add_liq_house<'info>(
         return Ok(false);
     }
     // HOUSE/meme deposit pool must be live.
-    if remaining[23].owner != &orca_whirlpool::ID || remaining[23].data_is_empty() {
+    if remaining[dep].owner != &orca_whirlpool::ID || remaining[dep].data_is_empty() {
         msg!("add_liq(house): HOUSE/meme pool not live; graceful no-op");
         return Ok(false);
     }
@@ -598,12 +607,14 @@ fn add_liq_house<'info>(
         return Ok(false);
     }
     // Detect the HOUSE side of the HOUSE/meme deposit pool + lp_owner's HOUSE ATA.
-    let lp_mint_a = remaining[29].key();
-    let lp_mint_b = remaining[30].key();
+    // Deposit accounts begin at `dep`: [dep]=whirlpool .. [dep+6]=mint_a [dep+7]=mint_b
+    // [dep+8]=owner_a [dep+9]=owner_b ... (the 14 increase_liquidity accounts).
+    let lp_mint_a = remaining[dep + 6].key();
+    let lp_mint_b = remaining[dep + 7].key();
     let (house_is_a, lp_house_owner_ai) = if lp_mint_a == house_mint::ID {
-        (true, &remaining[31])
+        (true, &remaining[dep + 8])
     } else if lp_mint_b == house_mint::ID {
-        (false, &remaining[32])
+        (false, &remaining[dep + 9])
     } else {
         msg!("add_liq(house): HOUSE/meme pool has no HOUSE side; graceful no-op");
         return Ok(false);
@@ -640,17 +651,19 @@ fn add_liq_house<'info>(
     ))?;
 
     // 2) PumpSwap buy_exact_quote_in (treasury-signed), byte-identical to bundle_buy_burn: spend
-    //    EXACTLY `spend` WSOL, accept any HOUSE out (min_base = 1). Forward the 23 accounts verbatim
-    //    (only [1] = treasury `user` is forced to sign).
+    //    EXACTLY `spend` WSOL, accept any HOUSE out (min_base = 1). Forward ALL pump accounts
+    //    (remaining[0..dep] — the full SDK set, 26 today) verbatim, NOT a truncated 23 (the
+    //    truncation dropped accounts the deployed AMM reads => Overflow). Only [1] = treasury
+    //    `user` is forced to sign.
     {
         let mut data = Vec::with_capacity(25);
         data.extend_from_slice(&pump_amm::BUY_EXACT_QUOTE_IN_DISCM);
         data.extend_from_slice(&spend.to_le_bytes());
         data.extend_from_slice(&1u64.to_le_bytes());
         data.push(0u8); // track_volume: Option<bool> = None
-        let mut metas: Vec<AccountMeta> = Vec::with_capacity(23);
-        let mut infos: Vec<AccountInfo<'info>> = Vec::with_capacity(23);
-        for (i, acc) in remaining[0..23].iter().enumerate() {
+        let mut metas: Vec<AccountMeta> = Vec::with_capacity(dep);
+        let mut infos: Vec<AccountInfo<'info>> = Vec::with_capacity(dep);
+        for (i, acc) in remaining[0..dep].iter().enumerate() {
             metas.push(AccountMeta {
                 pubkey: *acc.key,
                 is_signer: i == 1,
@@ -711,7 +724,7 @@ fn add_liq_house<'info>(
         orca_program,
         lp_owner,
         lp_owner_bump,
-        &remaining[23..37],
+        &remaining[dep..dep + 14],
         cpi_max_a,
         cpi_max_b,
     )?;
@@ -1843,9 +1856,11 @@ pub mod pump {
     ///   venue 1 (USDC) — 29 accounts:
     ///     [0..14)  swap_v2 (SOL/USDC pool), [14..28) increase_liquidity (USDC/meme pool),
     ///     [28] orca_whirlpool program. (See `add_liq_usdc` / `orca_swap_v2`.)
-    ///   venue 2 (HOUSE) — 38 accounts:
-    ///     [0..23)  PumpSwap buy_exact_quote_in, [23..37) increase_liquidity (HOUSE/meme pool),
-    ///     [37] orca_whirlpool program. (See `add_liq_house`.)
+    ///   venue 2 (HOUSE) — 41 accounts (26 pump + 14 deposit + 1 orca):
+    ///     [0..dep)  FULL PumpSwap buy_exact_quote_in set (dep = len-15, 26 today),
+    ///     [dep..dep+14) increase_liquidity (HOUSE/meme pool), [dep+14] orca_whirlpool
+    ///     program. (See `add_liq_house`. Forwarding the FULL pump set — not a truncated
+    ///     23 — is required: the dropped accounts made the AMM Overflow / 0x1787.)
     pub fn add_liq<'info>(
         ctx: Context<'_, '_, '_, 'info, AddLiq<'info>>,
         tick_lower_index: i32,

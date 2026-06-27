@@ -13,6 +13,8 @@ import clsx from "clsx";
 type Node = { a: string; p: string | null; u: string | null };
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
+const sol = (n: number) =>
+  n >= 1 ? n.toFixed(2) : n >= 0.001 ? n.toFixed(4) : n > 0 ? n.toFixed(6) : "0";
 
 export default function ReferralsPage() {
   const [nodes, setNodes] = useState<Node[] | null>(null);
@@ -20,6 +22,11 @@ export default function ReferralsPage() {
   const [focused, setFocused] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
+  // Per-wallet trade volume (grossSol) + fee bps, from /api/airdrop, used to estimate
+  // each node's referral earnings. The fee is 1/3 referral, split into 3 equal tiers
+  // (each fee/9 = volume * feeBps/10000/9), so a wallet earns that rate on the volume
+  // of EVERY referee within 3 levels below it (the 3-deep tree).
+  const [vol, setVol] = useState<{ map: Map<string, number>; rate: number } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +39,28 @@ export default function ReferralsPage() {
         if (alive) setNodes(j.nodes || []);
       } catch (e) {
         if (alive) setError((e as Error).message);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/airdrop");
+        if (!r.ok) return;
+        const j = await r.json();
+        const map = new Map<string, number>();
+        for (const w of j.wallets ?? []) {
+          if (w?.wallet) map.set(w.wallet, Number(w.grossSol) || 0);
+        }
+        const feeBps = Number(j?.assumptions?.FEE_BPS) || 100;
+        if (alive) setVol({ map, rate: feeBps / 10000 / 9 });
+      } catch {
+        /* earnings are best-effort; tree still renders without them */
       }
     })();
     return () => {
@@ -65,6 +94,40 @@ export default function ReferralsPage() {
     const roots = (nodes ?? []).filter((n) => n.p == null).map((n) => n.a);
     return { nameMap, parentMap, childrenMap, subtreeSize, roots };
   }, [nodes]);
+
+  // Estimated referral earnings (SOL) for a wallet: its tier rate (fee/9 of volume)
+  // times the total trade volume of every referee within 3 levels below it.
+  const earningsOf = useMemo(() => {
+    const cache = new Map<string, number>();
+    return (a: string): number => {
+      if (!vol) return 0;
+      const hit = cache.get(a);
+      if (hit !== undefined) return hit;
+      let v = 0;
+      const seen = new Set<string>([a]);
+      let frontier = [a];
+      for (let depth = 1; depth <= 3; depth++) {
+        const next: string[] = [];
+        for (const node of frontier) {
+          for (const kid of g.childrenMap.get(node) ?? []) {
+            if (seen.has(kid)) continue;
+            seen.add(kid);
+            v += vol.map.get(kid) ?? 0;
+            next.push(kid);
+          }
+        }
+        frontier = next;
+      }
+      const e = v * vol.rate;
+      cache.set(a, e);
+      return e;
+    };
+  }, [g, vol]);
+
+  const totalEarned = useMemo(
+    () => (vol ? (nodes ?? []).reduce((s, n) => s + earningsOf(n.a), 0) : 0),
+    [vol, nodes, earningsOf]
+  );
 
   useEffect(() => {
     if (nodes && nodes.length && !focused) {
@@ -117,7 +180,6 @@ export default function ReferralsPage() {
   };
 
   const total = nodes?.length ?? 0;
-  const named = (nodes ?? []).filter((n) => n.u).length;
   const up = focused ? ancestors(focused) : [];
   const kids = focused
     ? [...(g.childrenMap.get(focused) ?? [])].sort(
@@ -200,11 +262,14 @@ export default function ReferralsPage() {
       {nodes && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           <Stat value={String(total)} label="members" />
-          <Stat value={String(named)} label="named" />
           <Stat value={String(g.roots.length)} label="roots" />
           <Stat
             value={focused ? String(g.subtreeSize(focused)) : "—"}
             label="downstream of focus"
+          />
+          <Stat
+            value={vol ? `◎${sol(totalEarned)}` : "…"}
+            label="est. referral earned (all)"
             accent
           />
         </div>
@@ -221,7 +286,15 @@ export default function ReferralsPage() {
           {[...up].reverse().map((a) => (
             <div key={a} className="flex flex-col items-center">
               <div className="w-full max-w-xs">
-                <NodeChip addr={a} accent="up" sub={`${g.subtreeSize(a)} downstream`} />
+                <NodeChip
+                  addr={a}
+                  accent="up"
+                  sub={
+                    vol
+                      ? `${g.subtreeSize(a)} down · ◎${sol(earningsOf(a))} earned`
+                      : `${g.subtreeSize(a)} downstream`
+                  }
+                />
               </div>
               <div className="text-gray-600">↓</div>
             </div>
@@ -257,6 +330,14 @@ export default function ReferralsPage() {
                 <span>
                   depth <span className="text-white font-bold">{up.length}</span>
                 </span>
+                {vol && (
+                  <span>
+                    est. earned{" "}
+                    <span className="text-green-300 font-bold">
+                      ◎{sol(earningsOf(focused))}
+                    </span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -271,12 +352,14 @@ export default function ReferralsPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 w-full">
                 {kids.map((a) => {
                   const sz = g.subtreeSize(a);
+                  const e = vol ? earningsOf(a) : 0;
+                  const base = sz > 0 ? `+${sz} below` : "leaf";
                   return (
                     <NodeChip
                       key={a}
                       addr={a}
                       accent="down"
-                      sub={sz > 0 ? `+${sz} below` : "leaf"}
+                      sub={vol && e > 0 ? `${base} · ◎${sol(e)}` : base}
                     />
                   );
                 })}

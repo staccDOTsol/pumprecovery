@@ -756,15 +756,17 @@ export async function buildAddLiqIx(
     const swap = await deriveUsdcSwapAccounts(connection, lpOwnerWsolAta, lpOwnerUsdcAta);
     remaining = [...swap, ...depositAccounts(pos), meta(ORCA_PROGRAM, false)];
   } else {
-    // PumpSwap buy_exact_quote_in (23, identical to bundle_buy_burn) + HOUSE/meme
-    // deposit (14) + orca (38). The SDK derives the canonical buy accounts; the
-    // first 23 are exactly what the program's `buy_exact_quote_in` CPI consumes,
-    // and [1] (treasury "user") is forced non-signer (the program signs for it).
-    // quoteIn only feeds the SDK's quote math (accounts are pool-fixed); floor it
-    // so a tiny LP third can never make buyQuoteInput throw.
+    // PumpSwap buy_exact_quote_in + HOUSE/meme deposit (14) + orca. Forward the
+    // FULL SDK buy account set (26 today) — IDENTICAL to bundle_buy_burn. The earlier
+    // `slice(0, 23)` dropped the 3 trailing accounts the DEPLOYED AMM actually reads,
+    // so it read garbage and threw pump_amm Overflow (custom 0x1787) on every HOUSE
+    // buy. The program splits buy vs deposit at remaining.len()-15, so any SDK count
+    // works. [1] (treasury "user") is forced non-signer (the program signs for it).
+    // quoteIn only feeds the SDK's quote math (accounts are pool-fixed); floor it so a
+    // tiny LP third can never make buyQuoteInput throw.
     const sdkQuote = BN.max(spend, new BN(1_000_000));
     const { buyIx } = await deriveHouseBuyIx(connection, sdkQuote);
-    const pumpKeys: Meta[] = buyIx.keys.slice(0, 23).map((k, i) => ({
+    const pumpKeys: Meta[] = buyIx.keys.map((k, i) => ({
       pubkey: k.pubkey,
       isSigner: i === 1 ? false : k.isSigner,
       isWritable: k.isWritable,
