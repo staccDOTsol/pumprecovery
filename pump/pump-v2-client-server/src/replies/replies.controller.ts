@@ -50,9 +50,12 @@ export class RepliesController {
   }
 
   @Get('ban')
-  async getBan(@Param('id') id: number, @Req() req: any) {
+  async getBan(@Req() req: any) {
     const origin = getClientIp(req);
     const ban = await this.repliesService.getBan(origin);
+    // No ban for this origin (the common case) — getBan returns null/undefined,
+    // so guard before deleting the field (this `delete` on null was the 500).
+    if (!ban) return null;
     delete ban.origin;
     return ban;
   }

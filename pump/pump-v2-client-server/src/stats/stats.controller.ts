@@ -19,4 +19,10 @@ export class StatsController {
     if (!mint) return { error: 'mint required' };
     return this.stats.orcaTvl(mint);
   }
+
+  @Throttle({ default: { ttl: 60_000, limit: 120 } })
+  @Get('global')
+  async global() {
+    return this.stats.global();
+  }
 }
