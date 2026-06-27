@@ -493,12 +493,11 @@ export async function fetchLpPositions(mint: string): Promise<LpPositions | null
         if (!j.error && j.registry) liveRegistryCache = { at: now, data: j.registry };
       }
     }
-    const live = coerceLpPositions(liveRegistryCache?.data?.[mint]);
-    if (live) return live;
+    // LIVE, on-chain-derived registry only — no static lpPositions.json fallback.
+    return coerceLpPositions(liveRegistryCache?.data?.[mint]);
   } catch {
-    /* fall through to static */
+    return null;
   }
-  return getLpPosition(mint);
 }
 
 /** The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`. */

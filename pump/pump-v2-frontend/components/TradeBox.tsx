@@ -75,12 +75,14 @@ import {
 } from "@/lib/buyBurn";
 import { humanizeWalletError, bundleWalletBlockReason } from "@/lib/walletError";
 
-// Round-robin venue selector for the optional add_liq leg. A single localStorage
-// counter makes consecutive trades rotate SOL(0)->USDC(1)->HOUSE(2) among ONLY
-// the venues that actually have a pre-opened position for the coin. SSR-safe.
+// Venue order for the optional add_liq leg. A single localStorage counter makes
+// consecutive trades START the rotation at SOL(0)->USDC(1)->HOUSE(2) among ONLY
+// the venues that actually have a live on-chain position for the coin. The caller
+// then tries them IN THIS ORDER and uses the first whose single-sided deposit is
+// currently valid — so a guard-skipped venue doesn't kill the whole leg. SSR-safe.
 const ADD_LIQ_ROTATION_KEY = "addLiqVenueRotation";
-function pickNextAddLiqVenue(venues: Venue[]): Venue {
-  if (venues.length <= 1) return venues[0];
+function addLiqVenueOrder(venues: Venue[]): Venue[] {
+  if (venues.length <= 1) return venues;
   let counter = 0;
   try {
     if (typeof window !== "undefined") {
@@ -90,7 +92,6 @@ function pickNextAddLiqVenue(venues: Venue[]): Venue {
   } catch {
     /* ignore */
   }
-  const venue = venues[counter % venues.length];
   try {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(
@@ -101,7 +102,8 @@ function pickNextAddLiqVenue(venues: Venue[]): Venue {
   } catch {
     /* ignore */
   }
-  return venue;
+  // rotation-ordered: start at `counter`, then wrap through the rest
+  return venues.map((_, i) => venues[(counter + i) % venues.length]);
 }
 
 interface TradeProps {
@@ -463,16 +465,20 @@ export default function TradeBox({
       // break the buy: any error falls back to the 3-leg bundle. When active the
       // bundle is buy -> add_liq(venue) -> burn -> commit.
       let txAddLiq: VersionedTransaction | null = null;
-      try {
-        if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-          const positions = await fetchLpPositions(coin.mint);
-          const venues = positions ? availableVenues(positions) : [];
-          if (positions && venues.length > 0) {
-            const venue = pickNextAddLiqVenue(venues);
+      if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
+        // Try EVERY venue that has a live on-chain position, in rotation order,
+        // and use the FIRST whose single-sided deposit is currently valid (the
+        // others get guard-skipped when price has moved through their range).
+        // Building this can NEVER break the buy — any failure leaves the 3-leg
+        // bundle. (5-tx Jito cap = one venue per trade; rotation fills all 3.)
+        const positions = await fetchLpPositions(coin.mint);
+        const order = positions ? addLiqVenueOrder(availableVenues(positions)) : [];
+        for (const venue of order) {
+          try {
             const addLiqIx = await buildAddLiqIx(
               connection,
               wallet.publicKey,
-              positions,
+              positions!,
               venue,
               burnLamports
             );
@@ -481,11 +487,11 @@ export default function TradeBox({
               units: venue === 2 ? 600_000 : 400_000,
             });
             txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
+            break;
+          } catch (e) {
+            console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
           }
         }
-      } catch (e) {
-        console.warn("add_liq leg skipped (falling back to 3-leg bundle):", e);
-        txAddLiq = null;
       }
       // tx3: buy & burn $HOUSE leg.
       const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
@@ -716,29 +722,30 @@ export default function TradeBox({
       // round-robin among those with a registry position. Consumes the LP third
       // escrowed by `sell`; any build failure falls back to the 3-leg bundle.
       let txAddLiq: VersionedTransaction | null = null;
-      try {
-        if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-          const positions = await fetchLpPositions(coin.mint);
-          const venues = positions ? availableVenues(positions) : [];
-          if (positions && venues.length > 0) {
-            const venue = pickNextAddLiqVenue(venues);
+      if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
+        // Try every venue with a live on-chain position, in rotation order, and
+        // use the first whose single-sided deposit is currently valid. Never
+        // breaks the sell — any failure leaves the 3-leg bundle.
+        const positions = await fetchLpPositions(coin.mint);
+        const order = positions ? addLiqVenueOrder(availableVenues(positions)) : [];
+        for (const venue of order) {
+          try {
             const addLiqIx = await buildAddLiqIx(
               connection,
               wallet.publicKey,
-              positions,
+              positions!,
               venue,
               burnLamports
             );
-            // venue 2 (HOUSE) does a PumpSwap buy + Orca deposit -> CU-heavy; 600k.
             const addLiqCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
               units: venue === 2 ? 600_000 : 400_000,
             });
             txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
+            break;
+          } catch (e) {
+            console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
           }
         }
-      } catch (e) {
-        console.warn("add_liq leg skipped (falling back to 3-leg bundle):", e);
-        txAddLiq = null;
       }
       const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
       const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);

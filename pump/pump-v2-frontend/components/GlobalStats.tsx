@@ -64,7 +64,9 @@ export function GlobalStats() {
     let alive = true;
     const load = async () => {
       try {
-        const r = await fetch("/api/global-stats");
+        const r = await fetch(
+          `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/stats/global`
+        );
         if (!r.ok) return;
         const j = await r.json();
         if (j.error) return;
