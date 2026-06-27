@@ -13,17 +13,29 @@ export class AuthService {
   ) {}
 
   async login(login: LoginDto) {
-    const { signature, timestamp, address } = login;
+    const { signature, timestamp, address, message: clientMessage } = login;
 
-    // if (timestamp > Date.now() || timestamp < Date.now() - 120 * 1000) {
-    //   throw new UnauthorizedException('Invalid timestamp');
-    // }
+    // The backend no longer pins a site URL. We accept any message the wallet
+    // signed as long as it has our known shape ("Sign in to <brand>: <ts>") and
+    // ends with THIS timestamp — so each mirror can brand its own sign-in. The
+    // message text grants no privilege; the signature is the proof of wallet
+    // ownership. Neutral + legacy canonical messages are accepted as fallbacks.
+    const candidates: string[] = [];
+    if (
+      typeof clientMessage === 'string' &&
+      clientMessage.length <= 96 &&
+      /^Sign in to .{1,64}: \d{10,16}$/.test(clientMessage) &&
+      clientMessage.endsWith(`: ${timestamp}`)
+    ) {
+      candidates.push(clientMessage);
+    }
+    candidates.push(`Sign in to Pump ICO mirror: ${timestamp}`); // neutral default
+    candidates.push(`Sign in to stacc.art: ${timestamp}`); // legacy (transitional)
 
-    const message = `Sign in to stacc.art: ${timestamp}`;
-    const verified = sign.detached.verify(
-      new TextEncoder().encode(message),
-      bs58.decode(signature),
-      bs58.decode(address),
+    const sig = bs58.decode(signature);
+    const addr = bs58.decode(address);
+    const verified = candidates.some((m) =>
+      sign.detached.verify(new TextEncoder().encode(m), sig, addr),
     );
 
     if (!verified) throw new UnauthorizedException('Invalid signature');
