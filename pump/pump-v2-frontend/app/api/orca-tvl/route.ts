@@ -17,7 +17,9 @@ export async function GET(req: Request) {
   if (!mint) return Response.json({ error: "mint required" }, { status: 400 });
 
   const key = process.env.BIRDEYE_API_KEY;
-  if (!key) return Response.json({ error: "BIRDEYE_API_KEY not configured" }, { status: 500 });
+  // Mirror without the Birdeye key — degrade gracefully (200, not 500); the
+  // consumer hides the widget instead of erroring.
+  if (!key) return Response.json({ unavailable: true }, { status: 200 });
 
   const headers = { "X-API-KEY": key, "x-chain": "solana", accept: "application/json" };
 

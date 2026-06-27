@@ -5,27 +5,26 @@ import sleep from "sleep-promise";
 const MAX_RETRIES = 5;
 
 /**
- * Dynamic Jito tip (lamports). Pulls Jito's live landed-tip floor and uses the
- * 75th percentile, clamped to a sane [floor, cap] so bundles land on contested
- * slots without overpaying. A bundle that MUST land (tokens are withheld until
- * `commit`) warrants a competitive tip, not the old 0.0003 SOL floor.
+ * Dynamic Jito tip (lamports) = Jito's RECOMMENDED landed-tip floor (the 50th
+ * percentile / median landed tip), clamped to a sane [floor, cap]. We do NOT pay
+ * the 99th percentile (let alone 4x it) — that massively overpays on every
+ * trade. The median is enough to be included, and the bundle's same-slot
+ * atomicity is enforced on-chain by the BundleGuard regardless of the tip.
  */
 export const getJitoTipLamports = async (): Promise<number> => {
-  // For protected bundles the tip in tx0 decides whether leaders actually
-  // include the bundle. Use 99th percentile + headroom when possible.
-  const FLOOR = 1_000_000; // 0.001 SOL — realistic floor for un-sandwichable protection
-  const CAP = 10_000_000; // 0.01 SOL
+  const FLOOR = 10_000; // 0.00001 SOL — never 0
+  const CAP = 1_000_000; // 0.001 SOL — hard ceiling so we can't overpay
   try {
     const res = await fetch("/api/jito?action=tipfloor").then((r) => r.json());
     const row = Array.isArray(res) ? res[0] : res;
-    const sol99 =
-      row?.landed_tips_99th_percentile ??
-      row?.landed_tips_95th_percentile ??
+    // Recommended = median landed tip (SOL). Fall back through nearby percentiles.
+    const recSol =
+      row?.landed_tips_50th_percentile ??
       row?.ema_landed_tips_50th_percentile ??
+      row?.landed_tips_25th_percentile ??
       0;
-    // Target ~4-5x 99th or direct 99th with buffer. Clamp to sane range.
-    const dynamic = Math.floor(Number(sol99) * 1e9 * 4);
-    return Math.min(CAP, Math.max(FLOOR, dynamic || FLOOR));
+    const lamports = Math.floor(Number(recSol) * 1e9);
+    return Math.min(CAP, Math.max(FLOOR, lamports || FLOOR));
   } catch {
     return FLOOR;
   }

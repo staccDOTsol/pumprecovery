@@ -61,7 +61,9 @@ export async function GET(req: Request) {
   const sbKey = process.env.SUPABASE_KEY;
   const beKey = process.env.BIRDEYE_API_KEY;
   if (!sbUrl || !sbKey || !beKey) {
-    return Response.json({ error: "missing server env" }, { status: 500 });
+    // Mirror without the server-side stats secrets — degrade gracefully (200,
+    // not a 500): the consumer hides this widget instead of erroring.
+    return Response.json({ unavailable: true }, { status: 200 });
   }
 
   let volSol = 0;

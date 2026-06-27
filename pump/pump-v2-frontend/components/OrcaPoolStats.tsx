@@ -21,6 +21,7 @@ const fmtUsd = (n: number) =>
 
 export function OrcaPoolStats({ mint }: { mint: string }) {
   const [stats, setStats] = useState<Stats>(null);
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -29,6 +30,10 @@ export function OrcaPoolStats({ mint }: { mint: string }) {
         const res = await fetch(`/api/orca-tvl?mint=${mint}`);
         if (!res.ok) return;
         const j = await res.json();
+        if (j.unavailable) {
+          if (alive) setHidden(true);
+          return;
+        }
         if (j.error) return;
         if (alive)
           setStats({
@@ -47,6 +52,9 @@ export function OrcaPoolStats({ mint }: { mint: string }) {
       clearInterval(id);
     };
   }, [mint]);
+
+  // Stats not configured on this deploy (e.g. a mirror) — hide entirely.
+  if (hidden) return null;
 
   const orcaUrl = `https://www.orca.so/pools?tokens=${mint}`;
   const OrcaLink = () => (

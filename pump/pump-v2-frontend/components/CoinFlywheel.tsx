@@ -22,6 +22,7 @@ const fmtUsd = (n: number) =>
 
 export function CoinFlywheel({ mint }: { mint: string }) {
   const [f, setF] = useState<F>(null);
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -30,6 +31,10 @@ export function CoinFlywheel({ mint }: { mint: string }) {
         const r = await fetch(`/api/coin-flywheel?mint=${mint}`);
         if (!r.ok) return;
         const j = await r.json();
+        if (j.unavailable) {
+          if (alive) setHidden(true);
+          return;
+        }
         if (j.error) return;
         if (alive)
           setF({ refIncomeUsd: j.refIncomeUsd || 0, burnUsd: j.burnUsd || 0 });
@@ -44,6 +49,9 @@ export function CoinFlywheel({ mint }: { mint: string }) {
       clearInterval(id);
     };
   }, [mint]);
+
+  // Stats not configured on this deploy (e.g. a mirror) — hide rather than 500.
+  if (hidden) return null;
 
   return (
     <div className="border border-gray-800 rounded p-3 w-full">
