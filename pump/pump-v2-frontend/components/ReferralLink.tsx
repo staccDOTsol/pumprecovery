@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { captureReferral } from "@/constants/venues";
+import { getBrandOrigin } from "@/lib/brand";
 
 /**
  * Surfaces the connected wallet's referral link on every page (lives in the
@@ -39,7 +40,7 @@ export function ReferralLink() {
   // route change (pathname dep) and reads the live URL for query params.
   const buildLink = useCallback(() => {
     if (!address) return "";
-    if (typeof window === "undefined") return `https://www.stacc.art/?ref=${address}`;
+    if (typeof window === "undefined") return `${getBrandOrigin()}/?ref=${address}`;
     const url = new URL(window.location.href);
     url.searchParams.set("ref", address); // replace any inbound ref with ours
     return url.toString();

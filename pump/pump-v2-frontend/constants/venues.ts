@@ -30,10 +30,23 @@ export const USDC_MINT = new PublicKey(
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 );
 
-// Program default referrer. Used when no referrer is captured/stored.
-export const DEFAULT_REFERRER = new PublicKey(
-  "WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb"
-);
+// Top-level / fallback referrer used when no `?ref=` is captured or stored.
+// Driven by NEXT_PUBLIC_DEFAULT_REFERRER so each mirror/fork earns its own
+// top-of-tree referral fees (prompted at 1-click deploy). Falls back to the
+// canonical wallet if unset/invalid so module load can never crash.
+const FALLBACK_DEFAULT_REFERRER = "WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb";
+function resolveDefaultReferrer(): PublicKey {
+  const fromEnv = process.env.NEXT_PUBLIC_DEFAULT_REFERRER?.trim();
+  if (fromEnv) {
+    try {
+      return new PublicKey(fromEnv);
+    } catch {
+      /* invalid env value — use canonical fallback below */
+    }
+  }
+  return new PublicKey(FALLBACK_DEFAULT_REFERRER);
+}
+export const DEFAULT_REFERRER = resolveDefaultReferrer();
 
 export const REFERRER_STORAGE_KEY = "pumpReferrer";
 export const REFERRAL_CHAIN_STORAGE_KEY = "pumpReferralChain";

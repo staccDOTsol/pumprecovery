@@ -11,10 +11,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "./ui/button";
 import { useLocalStorage } from "@uidotdev/usehooks";
+import { useBrand } from "@/lib/useBrand";
 
 export function HowItWorks() {
   // WhyNotPump is the first-load blurb now; HowItWorks opens only via its button
   const [isOpen, setIsOpen] = useLocalStorage("show-how-it-works", false);
+  const brand = useBrand();
 
   return (
     <Dialog open={isOpen} onOpenChange={(v) => setIsOpen(v)}>
@@ -30,8 +32,8 @@ export function HowItWorks() {
         </DialogHeader>
 
         <div>
-          Pump prevents rugs by making sure that all created tokens are safe.
-          Each coin on pump is a{" "}
+          {brand} prevents rugs by making sure that all created tokens are
+          safe. Each coin on {brand} is a{" "}
           <span className="text-green-300 bold">fair-launch</span> with{" "}
           <span className="text-blue-300">no presale</span> and{" "}
           <span className="text-orange-300">no team allocation.</span>
@@ -46,11 +48,12 @@ export function HowItWorks() {
             step 3: sell at any time to lock in your profits or losses
           </div>
           <div className="text-gray-300">
-            step 4: when enough people buy on the bonding curve it reaches a
-            market cap of $69k
+            step 4: every buy &amp; sell also splits fees 1/3 to referrers, 1/3
+            into permanent LP, and 1/3 to buy &amp; burn $Pump&nbsp;ICO
           </div>
           <div className="text-gray-300">
-            step 5: $12k of liquidity is then deposited in raydium and burned
+            step 5: when the bonding curve sells out the coin graduates to a DEX
+            and its liquidity is locked forever
           </div>
         </div>
 
@@ -59,7 +62,7 @@ export function HowItWorks() {
           variant="ghost"
           className="text-slate-50 hover:font-bold hover:bg-transparent hover:text-slate-50"
         >
-          [I{"'"}m ready to pump]
+          [I{"'"}m ready to stacc]
         </Button>
       </DialogContent>
     </Dialog>

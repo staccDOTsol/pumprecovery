@@ -12,13 +12,17 @@ import { WalleWithoutAuth } from "./WalletWithoutAuth";
 import { LatestCoin } from "./LatestCoin";
 import clsx from "clsx";
 import { useProfile } from "@/providers/ProfileProvider";
+import { useBrand } from "@/lib/useBrand";
+import { MirrorWarning } from "./MirrorWarning";
 
 const NavBar = ({ children }: { children: React.ReactNode }) => {
   const isClient = useIsClient();
   const { address, user } = useProfile();
+  const brand = useBrand();
 
   return (
     <div className="flex flex-col min-h-screen">
+      <MirrorWarning />
       {/* <div className="border p-2 border-green-400 text-green-400">
           Charts and trades are currently being updated -- site might be affected for the next ~20 minutes.
         </div> */}
@@ -28,7 +32,7 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
           <Link href="/board">
             <Image
               src="/logo.png"
-              alt="stacc.art"
+              alt={brand}
               width={25}
               height={25}
               className="mr-4"
@@ -62,6 +66,13 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
                 className="text-sm text-green-300 hover:font-bold hover:text-green-200"
               >
                 [airdrop]
+              </Link>
+
+              <Link
+                href="/referrals"
+                className="text-sm text-green-300 hover:font-bold hover:text-green-200"
+              >
+                [ref tree]
               </Link>
 
               {isClient && <WhyNotPump />}
@@ -128,7 +139,7 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
       {/* Disclaimer + GitHub at bottom of page - rebrand to stacc.art demo */}
       <footer className="p-2 text-center text-xs text-gray-400 border-t border-gray-800 mt-4">
         <div className="max-w-2xl mx-auto">
-          <strong>stacc.art</strong> — This is only a reference/historical/educational demo implementation of a pump.fun-style bonding curve.
+          <strong>{brand}</strong> — This is only a reference/historical/educational demo implementation of a pump.fun-style bonding curve.
           Not affiliated with or endorsed by pump.fun.
           <br />
           Reference CA:{" "}

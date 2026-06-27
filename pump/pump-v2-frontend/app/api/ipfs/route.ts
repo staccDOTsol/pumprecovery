@@ -1,6 +1,7 @@
 import { NextApiResponse } from "next";
 import pinataSDK from "@pinata/sdk";
 import { Readable } from "stream";
+import { getBrandOrigin } from "@/lib/brand";
 
 const pinata = new pinataSDK({
   pinataApiKey: process.env.PINATA_API_KEY,
@@ -64,7 +65,7 @@ export const POST = async (req: Request) => {
       description,
       image: `https://ipfs.io/ipfs/${imageIpfsHash}`,
       showName,
-      createdOn: "https://pump.fun",
+      createdOn: getBrandOrigin(),
     };
 
     if (twitter) metadata.twitter = twitter;

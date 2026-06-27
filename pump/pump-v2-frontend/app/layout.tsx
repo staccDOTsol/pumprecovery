@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { getBrand, getBrandOrigin } from "@/lib/brand";
 import "./globals.css";
 import { SolanaWalletProvider } from "../providers/WalletProvider";
 import { LinkedXProvider } from "@/providers/LinkedXProvider";
@@ -12,12 +13,31 @@ import { ProfileProvider } from "@/providers/ProfileProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
+const BRAND = getBrand();
+const ORIGIN = getBrandOrigin();
+const TITLE = `${BRAND} — Solana bonding-curve launchpad`;
+const DESC =
+  `${BRAND} is an independent, open on-chain token launchpad on Solana where every trade permanently adds Orca liquidity, rewards referrers, and buys & burns. Not affiliated with or endorsed by any other launchpad.`;
+
 export const metadata: Metadata = {
-  title: "stacc.art",
-  description:
-    "stacc.art - reference/historical/educational demo implementation of pump.fun style bonding curve. Not affiliated. Reference: https://pump.fun/coin/Ha1JzNcMtzffLaivL7b4Wzoj5um7Nctcy529BbbYpump",
+  metadataBase: new URL(ORIGIN),
+  title: TITLE,
+  description: DESC,
+  applicationName: BRAND,
   icons: {
     icon: "/logo.png",
+  },
+  openGraph: {
+    title: TITLE,
+    description: DESC,
+    url: ORIGIN,
+    siteName: BRAND,
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESC,
   },
 };
 

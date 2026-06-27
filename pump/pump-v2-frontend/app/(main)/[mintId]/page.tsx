@@ -6,6 +6,7 @@ import TradeBox from "@/components/TradeBox";
 import { BondingProgress } from "@/components/BondingProgress";
 import { OrcaPoolStats } from "@/components/OrcaPoolStats";
 import { CoinFlywheel } from "@/components/CoinFlywheel";
+import { CopyCa } from "@/components/CopyCa";
 import Transactions from "@/components/Transactions";
 import Chart from "@/components/Chart/Chart";
 import { Button } from "@/components/ui/button";
@@ -133,9 +134,10 @@ export default function Trade({
               <div
                 className={`text-xs text-green-300 flex w-full justify-between items-center`}
               >
-                <div className="flex gap-4">
+                <div className="flex gap-4 items-center flex-wrap">
                   <div className="text-gray-400">{coin.name}</div>
                   <div className="text-gray-400">Ticker: {coin.symbol}</div>
+                  <CopyCa mint={coin.mint} />
 
                   <div>
                     Market cap: $
@@ -284,6 +286,11 @@ export default function Trade({
         )}
 
         <div className="h-full p-4 overflow-auto">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-sm font-bold text-white">{coin.name}</span>
+            <span className="text-xs text-gray-400">[{coin.symbol}]</span>
+            <CopyCa mint={coin.mint} />
+          </div>
           {selectedTab === "info" && <Info coin={coin} />}
           {selectedTab === "chart" && (
             <div className="w-full h-full" id="chart">

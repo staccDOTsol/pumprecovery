@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import NavBar from "@/components/NavBar";
 import { Toaster } from "@/components/ui/toaster";
+import { getBrand } from "@/lib/brand";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Pump",
+  title: getBrand(),
   description:
     "Launch a coin that is instantly tradeable without having to seed liquidity.",
 };

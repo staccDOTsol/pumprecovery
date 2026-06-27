@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogTrigger } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
+import { useBrand } from "@/lib/useBrand";
 
 const BalanceView = ({
   balance,
@@ -76,6 +77,7 @@ const AddCoin = ({
   onSubmit: (v?: string) => void;
 }) => {
   const [mint, setMint] = useState<string>();
+  const brand = useBrand();
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -107,7 +109,7 @@ const AddCoin = ({
 
         <div className="text-xs">
           if your coin is not listed, you can add it by providing the contract
-          address address. only coins launched on pump are supported.
+          address address. only coins launched on {brand} are supported.
         </div>
       </DialogContent>
     </Dialog>

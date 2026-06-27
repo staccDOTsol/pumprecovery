@@ -30,6 +30,7 @@ import {
 import { useIsClient } from "@uidotdev/usehooks";
 import { isMobile } from "react-device-detect";
 import { useRpcUrl } from "./RpcUrlProvider";
+import { getBrand, getBrandOrigin } from "@/lib/brand";
 
 export const SolanaWalletProvider = ({
   children,
@@ -62,11 +63,11 @@ export const SolanaWalletProvider = ({
         options: {
           // projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PJ_ID,
           metadata: {
-            name: "Pump",
+            name: getBrand(),
             description:
               "Launch a coin that is instantly tradeable without having to seed liquidity. Deploy a coin on Solana for under 2$ in one click.",
-            url: "https://pump.fun/",
-            icons: ["https://pump.fun/_next/image?url=%2Flogo.png&w=64&q=75"],
+            url: `${getBrandOrigin()}/`,
+            icons: [`${getBrandOrigin()}/logo.png`],
           },
         },
       }),

@@ -68,12 +68,12 @@ import {
 import {
   buildBundleBuyBurnIx,
   buildCommitIx,
-  getLpPosition,
+  fetchLpPositions,
   buildAddLiqIx,
   availableVenues,
   type Venue,
 } from "@/lib/buyBurn";
-import { humanizeWalletError } from "@/lib/walletError";
+import { humanizeWalletError, bundleWalletBlockReason } from "@/lib/walletError";
 
 // Round-robin venue selector for the optional add_liq leg. A single localStorage
 // counter makes consecutive trades rotate SOL(0)->USDC(1)->HOUSE(2) among ONLY
@@ -136,7 +136,7 @@ export default function TradeBox({
   const { pumpProgram } = usePumpProgram();
   const wallet = useAnchorWallet();
   const { connection } = useConnection();
-  const { signTransaction, signAllTransactions, publicKey } = useWallet();
+  const { signTransaction, signAllTransactions, publicKey, wallet: connectedWallet } = useWallet();
   const { solBalance } = useSolBalance(publicKey?.toBase58());
   const { tokenBalance, rawTokenBalance } = useTokenBalance(
     coin.mint,
@@ -422,8 +422,12 @@ export default function TradeBox({
       // BundleGuard counter enforces the full required mask landed this slot;
       // Jito guarantees same-slot + ordering. This is what makes trades
       // un-sandwichable: a bot must replicate the exact playbook or it won't fly.
-      if (!signAllTransactions) {
-        throw new Error("wallet does not support signAllTransactions (required for the trade bundle)");
+      const walletBlock = bundleWalletBlockReason(
+        connectedWallet?.adapter?.name,
+        !!signAllTransactions
+      );
+      if (walletBlock) {
+        throw new Error(walletBlock);
       }
 
       // Fetch the blockhash *immediately* before building+signing so that the
@@ -461,7 +465,7 @@ export default function TradeBox({
       let txAddLiq: VersionedTransaction | null = null;
       try {
         if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-          const positions = getLpPosition(coin.mint);
+          const positions = await fetchLpPositions(coin.mint);
           const venues = positions ? availableVenues(positions) : [];
           if (positions && venues.length > 0) {
             const venue = pickNextAddLiqVenue(venues);
@@ -492,7 +496,7 @@ export default function TradeBox({
       const bundleTxs = (txAddLiq
         ? [txBuy, txAddLiq, txBuyBurn, txCommit]
         : [txBuy, txBuyBurn, txCommit]) as VersionedTransaction[];
-      const signedTxs = await signAllTransactions(bundleTxs);
+      const signedTxs = await signAllTransactions!(bundleTxs);
       const signature = await sendJitoBundle(signedTxs, connection);
 
       if (comment) createComment(comment, signature);
@@ -672,8 +676,12 @@ export default function TradeBox({
         sellInstruction,
       ].filter((v) => v !== null) as TransactionInstruction[];
 
-      if (!signAllTransactions) {
-        throw new Error("wallet does not support signAllTransactions (required for the trade bundle)");
+      const walletBlock = bundleWalletBlockReason(
+        connectedWallet?.adapter?.name,
+        !!signAllTransactions
+      );
+      if (walletBlock) {
+        throw new Error(walletBlock);
       }
 
       // Fresh blockhash right before signing (see buy path for rationale).
@@ -710,7 +718,7 @@ export default function TradeBox({
       let txAddLiq: VersionedTransaction | null = null;
       try {
         if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-          const positions = getLpPosition(coin.mint);
+          const positions = await fetchLpPositions(coin.mint);
           const venues = positions ? availableVenues(positions) : [];
           if (positions && venues.length > 0) {
             const venue = pickNextAddLiqVenue(venues);
@@ -739,7 +747,7 @@ export default function TradeBox({
       const bundleTxs = (txAddLiq
         ? [txSell, txAddLiq, txBuyBurn, txCommit]
         : [txSell, txBuyBurn, txCommit]) as VersionedTransaction[];
-      const signedTxs = await signAllTransactions(bundleTxs);
+      const signedTxs = await signAllTransactions!(bundleTxs);
       const signature = await sendJitoBundle(signedTxs, connection);
 
       if (comment) createComment(comment, signature);

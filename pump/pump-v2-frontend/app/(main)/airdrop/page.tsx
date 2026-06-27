@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
+import { useBrand } from "@/lib/useBrand";
 
 /**
  * Airdrop "proof of spend" leaderboard. Pulls raw per-wallet metrics + live
@@ -214,9 +215,11 @@ export default function AirdropPage() {
     return [...v].sort((a, b) => key(b) - key(a));
   }, [scored, search, role, sort]);
 
+  const brand = useBrand();
+
   return (
     <div className="max-w-6xl mx-auto p-4 text-white w-full">
-      <h1 className="text-2xl font-bold">stacc.art airdrop — proof of spend</h1>
+      <h1 className="text-2xl font-bold">{brand} airdrop — proof of spend</h1>
       <p className="text-sm text-gray-400 mt-1">
         Ranks wallets by <span className="text-white font-semibold">real SOL paid into the system</span> — trad00rs by
         trading fees + creators by Orca venue rent. Score is concave and wash-discounted, so trading too much (or

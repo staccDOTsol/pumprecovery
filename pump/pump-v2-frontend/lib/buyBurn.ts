@@ -462,6 +462,45 @@ export function getLpPosition(mint: string): LpPositions | null {
   }
 }
 
+/** Coerce a raw per-venue object (from the live API or static JSON) into LpPositions. */
+function coerceLpPositions(raw: unknown): LpPositions | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (isVenuePosition(raw)) return { sol: raw }; // old flat shape
+  const e = raw as LpPositions;
+  const out: LpPositions = {};
+  if (isVenuePosition(e.sol)) out.sol = e.sol;
+  if (isVenuePosition(e.usdc)) out.usdc = e.usdc;
+  if (isVenuePosition(e.house)) out.house = e.house;
+  return out.sol || out.usdc || out.house ? out : null;
+}
+
+// Client-side memo of the live registry so we don't refetch on every trade.
+let liveRegistryCache: { at: number; data: Record<string, unknown> } | null = null;
+
+/**
+ * LIVE LP positions for a mint, derived on-chain via /api/lp-registry (cached
+ * server-side 60s + client-side 30s). Falls back to the static lpPositions.json
+ * (back-compat) if the API is unavailable. This is what lets newly-opened
+ * positions appear automatically — no JSON edit / commit / redeploy.
+ */
+export async function fetchLpPositions(mint: string): Promise<LpPositions | null> {
+  try {
+    const now = Date.now();
+    if (!liveRegistryCache || now - liveRegistryCache.at > 30_000) {
+      const res = await fetch("/api/lp-registry");
+      if (res.ok) {
+        const j = await res.json();
+        if (!j.error && j.registry) liveRegistryCache = { at: now, data: j.registry };
+      }
+    }
+    const live = coerceLpPositions(liveRegistryCache?.data?.[mint]);
+    if (live) return live;
+  } catch {
+    /* fall through to static */
+  }
+  return getLpPosition(mint);
+}
+
 /** The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`. */
 export function availableVenues(positions: LpPositions): Venue[] {
   const out: Venue[] = [];
@@ -605,6 +644,28 @@ export async function buildAddLiqIx(
   let liquidity = new BN(0);
   let tokenMaxA = new BN(0);
   let tokenMaxB = new BN(0);
+  // Safety (ALL venues): every venue deposits SINGLE-SIDED in its quote token
+  // (0=WSOL, 1=USDC, 2=HOUSE) into `pos.whirlpool`. That only yields liquidity
+  // when the live price sits on the quote side of the position's range; if the
+  // pool has drifted into/through the range the Orca CPI reverts LiquidityZero,
+  // which (in the atomic bundle) breaks the buy. Read the deposit pool's live
+  // tick and skip the leg (caller falls back to the 3-leg bundle) when invalid.
+  {
+    const quoteMint = [WSOL_MINT, USDC_MINT, HOUSE_MINT][venue];
+    const wInfo = await connection.getAccountInfo(pk(pos.whirlpool));
+    if (!wInfo) throw new Error(`add_liq(v${venue}): whirlpool not found; skipping`);
+    const tickCurrent = wInfo.data.readInt32LE(81);
+    const quoteIsA = pos.tokenMintA === quoteMint.toBase58();
+    const valid = quoteIsA
+      ? tickCurrent < pos.tickLowerIndex
+      : tickCurrent >= pos.tickUpperIndex;
+    if (!valid) {
+      throw new Error(
+        `add_liq(v${venue}): price in/through range (tick ${tickCurrent}, range [${pos.tickLowerIndex},${pos.tickUpperIndex}]) — single-sided deposit would yield 0 liquidity; skipping`
+      );
+    }
+  }
+
   if (venue === 0) {
     // sqrt price (NOT Q64) at a tick = 1.0001^(tick/2).
     const sqrtAt = (tick: number) => Math.pow(1.0001, tick / 2);

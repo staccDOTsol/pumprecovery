@@ -5,6 +5,7 @@ import { useLocalStorage } from "usehooks-ts";
 import base58 from "bs58";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { User, useUser } from "@/hooks/useUser";
+import { SIGNIN_BRAND } from "@/lib/brand";
 
 const ProfileContext = createContext<{
   loginToken: string | null;
@@ -42,7 +43,7 @@ export const ProfileProvider = ({
 
     try {
       const timestamp = Date.now();
-      const message = `Sign in to pump.fun: ${timestamp}`;
+      const message = `Sign in to ${SIGNIN_BRAND}: ${timestamp}`;
 
       const signature = base58.encode(
         await signMessage(new TextEncoder().encode(message))
@@ -59,6 +60,7 @@ export const ProfileProvider = ({
             address: publicKey.toBase58(),
             signature,
             timestamp,
+            message,
           }),
         }
       );

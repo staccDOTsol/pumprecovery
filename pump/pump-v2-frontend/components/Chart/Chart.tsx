@@ -6,6 +6,7 @@ import { useSocket } from "@/providers/SocketProvider";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { lamportsToSol } from "@/utils/lamportsToSol";
 import { humanizeTokenAmount } from "@/utils/humanizeTokenAmount";
+import { getBrand } from "@/lib/brand";
 import BN from "bn.js";
 interface Candlestick {
   timestamp: number;
@@ -189,7 +190,7 @@ const Chart: React.FC<ChartProps> = ({
               type: "crypto",
               session: "24x7",
               timezone: "Etc/UTC",
-              exchange: "Pump",
+              exchange: getBrand(),
               has_seconds: true,
               seconds_multipliers: ["1"],
               minmov: 1,
