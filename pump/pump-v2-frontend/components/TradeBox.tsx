@@ -82,10 +82,10 @@ import {
 import { humanizeWalletError, bundleWalletBlockReason } from "@/lib/walletError";
 
 // Venue order for the optional add_liq leg. A single localStorage counter makes
-// consecutive trades START the rotation at SOL(0)->USDC(1)->HOUSE(2) among ONLY
-// the venues that actually have a live on-chain position for the coin. The caller
-// then tries them IN THIS ORDER and uses the first whose single-sided deposit is
-// currently valid — so a guard-skipped venue doesn't kill the whole leg. SSR-safe.
+// consecutive trades START the rotation among the *currently valid* venues for the
+// coin (only those with registry "valid":true). We try them IN THIS ORDER from the
+// rotated start and take the first that passes live guards + sim (for swap venues).
+// A bad one for this tick doesn't kill the leg. SSR-safe.
 const ADD_LIQ_ROTATION_KEY = "addLiqVenueRotation";
 function addLiqVenueOrder(venues: Venue[]): Venue[] {
   if (venues.length <= 1) return venues;
@@ -115,15 +115,21 @@ function addLiqVenueOrder(venues: Venue[]): Venue[] {
 /**
  * Pick the optional `add_liq` (LP-forever) leg for the bundle, fully fail-safe.
  *
- * Selects EXACTLY ONE of the three (SOL/USDC/HOUSE) *at random* among those that have
- * a valid position (valid:true) in the live lp-registry for this mint.
- *  - SOL (0): pure single-sided WSOL deposit → taken as-is (after live range guard).
- *  - USDC/HOUSE: quote swap + deposit; only kept if full bundle sim shows no real revert.
- *  - If no valid venues at all, INIT a fresh one (via rotation) before the bundle.
+ * IMPORTANT: we *only* select from venues where the registry entry has "valid": true
+ * (the precomputed "this position's range is currently on the correct side of price
+ * for a single-sided deposit of the quote"). If none, or all fail live, we may skip
+ * or init fresh.
  *
- * Every button click gets a random one of the valid options (not always WSOL).
+ * We rotate the list of current valids to decide the starting preference for this click
+ * (the "ONE at SEQUENCE/random"), then *try in that order* and take the first that
+ * builds cleanly and (for non-sol) passes the bundle sim gate.
  *
- * Returns the add_liq leg tx, or null. NEVER throws into the main buy/sell.
+ * This fixes the "always only WSOL" symptom: previously we committed to exactly [0]
+ * of the rotated list and returned null on any failure for non-sol. Now we walk the
+ * valids from the rotated start so house/usdc get real chances when the rotation
+ * surfaces them and their live state + sim is good.
+ *
+ * Returns leg or null. Never breaks the main tx.
  */
 
 async function buildAddLiqLeg(opts: {
@@ -152,47 +158,54 @@ async function buildAddLiqLeg(opts: {
     ComputeBudgetProgram.setComputeUnitLimit({ units });
 
   try {
-    // Collect available venues for this coin from the (live) registry.
-    // isVenuePosition + availableVenues only include entries where "valid": true
-    // (or absent for back-compat). This ensures we only ever select among VALID LP
-    // positions. The live tick check inside buildAddLiqIx is an additional runtime
-    // guard.
+    // Collect *valid* venues for this coin from the (live) registry.
+    // isVenuePosition + availableVenues filter to only entries with "valid": true
+    // (back-compat if no "valid" key). This is the key: we must only pick from
+    // valid LP positions, otherwise the add_liq leg is useless / reverts.
+    // Runtime guard in buildAddLiqIx does a fresh tick check too.
     const positions = await fetchLpPositions(mint);
 
-    // Build list of *valid* venues (0/1/2) for this mint.
+    // Build list of *valid* venues (0/1/2) for this mint. Only entries with "valid": true
+    // (per the lp-registry snapshot) are included. We *must* only pick from valid ones
+    // or the single-sided deposit yields 0 liq or reverts.
     const avail: Venue[] = positions ? availableVenues(positions) : [];
 
-    // Select EXACTLY ONE (randomly) of the valid options for this mint.
-    // This guarantees that clicking the button gets a random one of the three
-    // (sol/house/usdc) *that are currently valid* in the registry.
-    let chosen: Venue | null = null;
+    // Build a per-click attempt order among the *valid* ones so every button click
+    // has a fair/random shot at sol/house/usdc (not stuck on wsol). We still bump
+    // the shared counter. Then walk until one passes its guards.
+    // (The previous "take exactly the head and bail" + sim drops was why only wsol
+    // was ever observed.)
+    let toTry: Venue[] = [];
     if (avail.length > 0) {
-      // side-effect bump the rotation counter (keeps init-fallback path fair)
-      addLiqVenueOrder(avail);
-      const idx = Math.floor(Math.random() * avail.length);
-      chosen = avail[idx];
+      addLiqVenueOrder(avail); // bump
+      toTry = [...avail];
+      // simple shuffle for this click's try order
+      for (let i = toTry.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [toTry[i], toTry[j]] = [toTry[j], toTry[i]];
+      }
     }
 
-    if (chosen !== null && positions) {
+    for (const venue of toTry) {
+      if (!positions) break;
       try {
         const addLiqIx = await buildAddLiqIx(
           connection,
           walletPubkey,
           positions,
-          chosen,
+          venue,
           burnLamports
         );
-        // Higher compute for HOUSE (2).
         const txAddLiq = buildTx([
           cuPriceIx,
-          cuLimit(chosen === 2 ? 600_000 : 400_000),
+          cuLimit(venue === 2 ? 600_000 : 400_000),
           addLiqIx,
         ]);
-        // SOL is pure WSOL single-sided, always safe (if range check passed inside build).
-        if (chosen === 0) {
+        if (venue === 0) {
+          // Pure WSOL single-sided — no swap, take it if the ix built (live range passed).
           return txAddLiq;
         }
-        // For USDC/HOUSE do the bundle sim gate to protect against swap reverts.
+        // Non-sol: gate on sim so we don't include a leg whose swap would revert on-chain.
         const candidate = [
           baseBundle[0],
           txAddLiq,
@@ -201,16 +214,16 @@ async function buildAddLiqLeg(opts: {
         ];
         const reverts = await addLiqLegWouldRevert(candidate, 1, connection);
         if (!reverts) return txAddLiq;
-        console.warn(`add_liq chosen venue ${chosen} would revert (swap) — skipping leg`);
-        return null;
+        console.warn(`add_liq venue ${venue} would revert (swap) — trying next rotated valid`);
       } catch (e) {
-        console.warn(`add_liq chosen venue ${chosen} skipped:`, (e as Error).message);
-        return null;
+        console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
+        // continue to next in the rotated valids list
       }
     }
 
-    // If there are NO existing positions at all for this mint: INIT a fresh position
-    // on ONE of the three (via rotation) so that add_liq can still happen.
+    // No usable leg from the current valid registry positions for this mint (all
+    // drifted this tick, or sim would revert, or none registered): try INIT a fresh
+    // in-range position on one of the three so the "1/3 to LP" still happens.
     if (
       process.env.NEXT_PUBLIC_INIT_LP_ON_TRADE === "false" ||
       !signTransaction
