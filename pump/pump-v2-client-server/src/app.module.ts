@@ -27,6 +27,7 @@ import { DatabaseModule } from './database/database.module';
 import { FollowingService } from './following/following.service';
 import { FollowingModule } from './following/following.module';
 import { MirrorsModule } from './mirrors/mirrors.module';
+import { StatsModule } from './stats/stats.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { MirrorsModule } from './mirrors/mirrors.module';
     DatabaseModule,
     FollowingModule,
     MirrorsModule,
+    StatsModule,
   ],
   controllers: [AppController],
   providers: [
