@@ -304,7 +304,7 @@ fn orca_increase_liq_by_token_amounts<'info>(
     Ok(())
 }
 
-/// Orca `swap_v2` CPI (disc f8c69e91e17587c8), `invoke_signed` by the `lp_owner` PDA
+/// Orca `swap_v2` CPI (disc 2b04ed0b1ac91e62 = sha256("global:swap_v2")), `invoke_signed` by the `lp_owner` PDA
 /// (token_authority). Exact-input swap of `amount_in` with min-out 0 and the price limit pinned to
 /// the [MIN,MAX] bound for the direction, so it can never revert on slippage. `sw` MUST be exactly
 /// the 14 swap accounts in this order (token_authority is injected from `lp_owner`):
@@ -326,7 +326,13 @@ fn orca_swap_v2<'info>(
     use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
     use anchor_lang::solana_program::program::invoke_signed;
 
-    const SWAP_V2_DISCM: [u8; 8] = [0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
+    // sha256("global:swap_v2")[0..8]. The previous value f8c69e91e17587c8 was
+    // sha256("global:swap") — Orca's V1 `swap`, whose 11-account layout differs from
+    // the V2 layout we pass (token_program_a/b + memo + mints). Invoking V1 with V2
+    // accounts made Orca read the signer slot as a token program (Custom 3010
+    // AccountNotSigner) and the tick-array slots as vault accounts (Custom 0x1787 /
+    // 6023 InvalidTickArraySequence) — the two alternating errors on the USDC venue.
+    const SWAP_V2_DISCM: [u8; 8] = [0x2b, 0x04, 0xed, 0x0b, 0x1a, 0xc9, 0x1e, 0x62];
 
     let layout: Vec<(AccountInfo<'info>, bool, bool)> = vec![
         (sw[0].clone(), false, false),   // token_program_a
