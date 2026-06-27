@@ -115,16 +115,15 @@ function addLiqVenueOrder(venues: Venue[]): Venue[] {
 /**
  * Pick the optional `add_liq` (LP-forever) leg for the bundle, fully fail-safe.
  *
- * Selects ONE venue out of the three (SOL/USDC/HOUSE) using round-robin/sequence rotation
- * among those present in the live registry with valid=true.
- *  - SOL (0): pure single-sided WSOL deposit into its position → always accepted.
- *  - USDC/HOUSE: the leg does a quote swap first; we simulate the full bundle and only
- *    keep the leg if the sim shows no real on-chain revert from the swap sub-CPI.
- *  - If NO *valid* venue for the mint, we INIT a fresh in-range position on one of the
- *    three (rotated) before the bundle — so 1/3-to-LP still works.
+ * Selects EXACTLY ONE of the three (SOL/USDC/HOUSE) *at random* among those that have
+ * a valid position (valid:true) in the live lp-registry for this mint.
+ *  - SOL (0): pure single-sided WSOL deposit → taken as-is (after live range guard).
+ *  - USDC/HOUSE: quote swap + deposit; only kept if full bundle sim shows no real revert.
+ *  - If no valid venues at all, INIT a fresh one (via rotation) before the bundle.
  *
- * Returns the add_liq leg tx, or null (caller ships the 3-leg bundle). NEVER throws
- * into the buy: any failure just yields null.
+ * Every button click gets a random one of the valid options (not always WSOL).
+ *
+ * Returns the add_liq leg tx, or null. NEVER throws into the main buy/sell.
  */
 
 async function buildAddLiqLeg(opts: {
