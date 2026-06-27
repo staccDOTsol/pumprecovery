@@ -42,6 +42,25 @@ export function getBrandOrigin(): string {
 }
 
 /**
+ * Server-side brand/origin from the incoming request Host header, so SSR
+ * metadata (OG / Twitter cards) reflects the ACTUAL mirror domain — crawlers
+ * fetch the real URL, so the Host header is the source of truth. Explicit
+ * NEXT_PUBLIC_BRAND / NEXT_PUBLIC_SITE_URL still win.
+ */
+export function brandFromHost(host?: string | null): string {
+  const env = envBrand();
+  if (env) return env;
+  const h = cleanHost(host);
+  return h || FALLBACK_BRAND;
+}
+export function originFromHost(host?: string | null, proto = "https"): string {
+  const env = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (env) return env.replace(/\/+$/, "");
+  const h = (host || "").trim();
+  return h ? `${proto}://${h}` : `https://${FALLBACK_BRAND}`;
+}
+
+/**
  * Sign-in challenge brand. Verified by the shared backend (auth.service.ts),
  * which accepts any "Sign in to <brand>: <ts>"-shaped message plus this neutral
  * default — so mirrors work without redeploying the backend.

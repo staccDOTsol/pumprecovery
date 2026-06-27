@@ -1,7 +1,7 @@
 import { NextApiResponse } from "next";
 import pinataSDK from "@pinata/sdk";
 import { Readable } from "stream";
-import { getBrandOrigin } from "@/lib/brand";
+import { originFromHost } from "@/lib/brand";
 
 const pinata = new pinataSDK({
   pinataApiKey: process.env.PINATA_API_KEY,
@@ -59,13 +59,17 @@ export const POST = async (req: Request) => {
     const response = await saveFile(file);
     const { IpfsHash: imageIpfsHash } = response;
 
+    const host =
+      req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+    const proto = req.headers.get("x-forwarded-proto") || "https";
+
     const metadata: any = {
       name,
       symbol,
       description,
       image: `https://ipfs.io/ipfs/${imageIpfsHash}`,
       showName,
-      createdOn: getBrandOrigin(),
+      createdOn: originFromHost(host, proto),
     };
 
     if (twitter) metadata.twitter = twitter;
