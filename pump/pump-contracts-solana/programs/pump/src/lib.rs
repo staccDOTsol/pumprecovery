@@ -40,7 +40,7 @@ pub mod config_feature {
     pub mod withdraw_authority {
         use anchor_lang::prelude::Pubkey;
         use anchor_lang::solana_program::pubkey;
-        pub const ID: Pubkey = pubkey!("DwsTaCR5d1WBFmcG9Tx432v1YWGyqz9zGzCX6TfxpC2C");
+        pub const ID: Pubkey = pubkey!("3ZdcMauPdKq6n49im6cR7shQScWR8A98tr42tZsa8JbS");
     }
 }
 
