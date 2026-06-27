@@ -525,9 +525,17 @@ export async function fetchLpPositions(mint: string): Promise<LpPositions | null
 /** The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`. */
 export function availableVenues(positions: LpPositions): Venue[] {
   const out: Venue[] = [];
+  // SOL = a pure single-sided WSOL deposit (no swap). The USDC + HOUSE venues
+  // first SWAP/BUY (USDC: WSOL->USDC on Orca; HOUSE: WSOL->HOUSE on PumpSwap)
+  // before depositing — and the Orca swap currently reverts the whole bundle
+  // with InvalidTickArraySequence (0x1787) from a malformed swap tick-array
+  // sequence. Gate those OFF by default so add_liq NEVER breaks a buy; flip
+  // NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=true once the swap tick arrays are fixed.
   if (isVenuePosition(positions.sol)) out.push(0);
-  if (isVenuePosition(positions.usdc)) out.push(1);
-  if (isVenuePosition(positions.house)) out.push(2);
+  if (process.env.NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES === "true") {
+    if (isVenuePosition(positions.usdc)) out.push(1);
+    if (isVenuePosition(positions.house)) out.push(2);
+  }
   return out;
 }
 
