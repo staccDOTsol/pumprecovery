@@ -1,29 +1,72 @@
 /**
  * Mirror registry source of truth.
  *
- * The list is driven by the NEXT_PUBLIC_MIRRORS env (comma-separated origins),
- * with a baked default so the deploy works immediately. Add/remove mirrors by
- * editing the Vercel env — no code change. Origins are normalised (no trailing
- * slash) and de-duped, order = priority.
+ * Two sources, merged:
+ *  1. LIVE self-registered mirrors from the shared backend's indexer
+ *     (GET <backend>/mirrors) — mirrors register themselves by virtue of their
+ *     users hitting the backend (Origin header) + report their top-level referrer.
+ *  2. A baked/env allowlist (NEXT_PUBLIC_MIRRORS) — always-trusted origins.
+ *
+ * Order = priority (env first, then live by recency). Origins are normalised
+ * (no trailing slash) and de-duped.
  */
 
 const DEFAULT_MIRRORS = [
   "https://stacc.art",
-  // add mirror origins here (or via NEXT_PUBLIC_MIRRORS), highest priority first:
-  // "https://staccmirror.xyz",
-  // "https://anotherstacc.app",
+  // add always-on origins here or via NEXT_PUBLIC_MIRRORS, highest priority first
 ];
 
 export const REGISTRY_BRAND =
   process.env.NEXT_PUBLIC_REGISTRY_BRAND?.trim() || "stacc.show";
 
-export function getMirrors(): string[] {
+export const BACKEND_URL =
+  process.env.NEXT_PUBLIC_CLIENT_API_URL?.trim() ||
+  "https://pump-client-server-ddd5e3eed248.herokuapp.com";
+
+export type MirrorEntry = { origin: string; defaultReferrer: string | null };
+
+const norm = (s: string) => s.trim().replace(/\/+$/, "");
+
+function envMirrors(): string[] {
   const env = process.env.NEXT_PUBLIC_MIRRORS;
   const raw = env && env.trim() ? env.split(",") : DEFAULT_MIRRORS;
-  const cleaned = raw
-    .map((s) => s.trim().replace(/\/+$/, ""))
-    .filter((s) => /^https?:\/\//.test(s));
-  return Array.from(new Set(cleaned));
+  return raw.map(norm).filter((s) => /^https?:\/\//.test(s));
+}
+
+async function liveMirrors(): Promise<MirrorEntry[]> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/mirrors`, { next: { revalidate: 60 } });
+    if (!res.ok) return [];
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((r: any) => ({
+        origin: norm(String(r.origin || "")),
+        defaultReferrer: r.default_referrer ? String(r.default_referrer) : null,
+      }))
+      .filter((e: MirrorEntry) => /^https?:\/\//.test(e.origin));
+  } catch {
+    return [];
+  }
+}
+
+/** Merged, de-duped mirror entries (env-trusted first, then live by recency). */
+export async function getMirrorEntries(): Promise<MirrorEntry[]> {
+  const env: MirrorEntry[] = envMirrors().map((origin) => ({ origin, defaultReferrer: null }));
+  const live = await liveMirrors();
+  const map = new Map<string, MirrorEntry>();
+  for (const e of [...env, ...live]) {
+    const prev = map.get(e.origin);
+    map.set(e.origin, {
+      origin: e.origin,
+      defaultReferrer: e.defaultReferrer ?? prev?.defaultReferrer ?? null,
+    });
+  }
+  return Array.from(map.values());
+}
+
+export async function getMirrors(): Promise<string[]> {
+  return (await getMirrorEntries()).map((e) => e.origin);
 }
 
 /** Reachability check (HEAD, GET fallback) with a hard timeout. */
@@ -38,7 +81,6 @@ export async function checkMirror(origin: string, timeoutMs = 2500): Promise<boo
         redirect: "manual",
         cache: "no-store",
       });
-      // Any HTTP response (incl. 3xx) means the host is up. Treat 5xx as down.
       return res.status > 0 && res.status < 500;
     } finally {
       clearTimeout(t);
@@ -55,21 +97,21 @@ export async function checkMirror(origin: string, timeoutMs = 2500): Promise<boo
   }
 }
 
-export type MirrorStatus = { origin: string; ok: boolean };
+export type MirrorStatus = MirrorEntry & { ok: boolean };
 
 export async function statusAll(): Promise<MirrorStatus[]> {
-  const mirrors = getMirrors();
+  const entries = await getMirrorEntries();
   return Promise.all(
-    mirrors.map(async (origin) => ({ origin, ok: await checkMirror(origin) }))
+    entries.map(async (e) => ({ ...e, ok: await checkMirror(e.origin) }))
   );
 }
 
 /** First healthy mirror by priority; falls back to the first listed if all down. */
 export async function pickHealthyMirror(): Promise<string> {
-  const mirrors = getMirrors();
-  if (mirrors.length === 0) return "https://stacc.art";
+  const origins = await getMirrors();
+  if (origins.length === 0) return "https://stacc.art";
   const checks = await Promise.all(
-    mirrors.map(async (origin) => ({ origin, ok: await checkMirror(origin) }))
+    origins.map(async (origin) => ({ origin, ok: await checkMirror(origin) }))
   );
-  return checks.find((c) => c.ok)?.origin ?? mirrors[0];
+  return checks.find((c) => c.ok)?.origin ?? origins[0];
 }

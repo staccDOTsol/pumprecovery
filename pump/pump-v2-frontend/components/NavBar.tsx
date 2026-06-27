@@ -14,6 +14,7 @@ import clsx from "clsx";
 import { useProfile } from "@/providers/ProfileProvider";
 import { useBrand } from "@/lib/useBrand";
 import { MirrorWarning } from "./MirrorWarning";
+import { MirrorPing } from "./MirrorPing";
 
 const NavBar = ({ children }: { children: React.ReactNode }) => {
   const isClient = useIsClient();
@@ -22,6 +23,7 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <div className="flex flex-col min-h-screen">
+      <MirrorPing />
       <MirrorWarning />
       {/* <div className="border p-2 border-green-400 text-green-400">
           Charts and trades are currently being updated -- site might be affected for the next ~20 minutes.
@@ -159,6 +161,24 @@ const NavBar = ({ children }: { children: React.ReactNode }) => {
             className="underline hover:text-white"
           >
             GitHub
+          </a>
+          {" | "}
+          <a
+            href="https://github.com/staccDOTsol/pumprecovery/blob/main/pump/pump-v2-frontend/README.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-white"
+          >
+            deploy your own mirror ↗
+          </a>
+          {" | "}
+          <a
+            href="https://stacc.show"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-white"
+          >
+            mirror index (stacc.show) ↗
           </a>
         </div>
       </footer>
