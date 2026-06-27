@@ -11,10 +11,20 @@
  * (no trailing slash) and de-duped.
  */
 
-const DEFAULT_MIRRORS = [
-  "https://stacc.art",
-  // add always-on origins here or via NEXT_PUBLIC_MIRRORS, highest priority first
+const DEFAULT_MIRRORS: string[] = [
+  // Mirrors come from the live backend index now — none are baked in.
+  // Add always-on origins via NEXT_PUBLIC_MIRRORS (comma-separated) if you want.
 ];
+
+// Origins that are NEVER listed or redirected to — e.g. the Google-flagged
+// canonical (stacc.art). Override with NEXT_PUBLIC_MIRROR_BLOCKLIST.
+const DEFAULT_BLOCKLIST = ["https://stacc.art", "https://www.stacc.art"];
+
+function blocklist(): Set<string> {
+  const env = process.env.NEXT_PUBLIC_MIRROR_BLOCKLIST;
+  const list = env && env.trim() ? env.split(",") : DEFAULT_BLOCKLIST;
+  return new Set(list.map(norm));
+}
 
 export const REGISTRY_BRAND =
   process.env.NEXT_PUBLIC_REGISTRY_BRAND?.trim() || "stacc.show";
@@ -62,7 +72,8 @@ export async function getMirrorEntries(): Promise<MirrorEntry[]> {
       defaultReferrer: e.defaultReferrer ?? prev?.defaultReferrer ?? null,
     });
   }
-  return Array.from(map.values());
+  const blocked = blocklist();
+  return Array.from(map.values()).filter((e) => !blocked.has(e.origin));
 }
 
 export async function getMirrors(): Promise<string[]> {
@@ -106,10 +117,14 @@ export async function statusAll(): Promise<MirrorStatus[]> {
   );
 }
 
-/** First healthy mirror by priority; falls back to the first listed if all down. */
-export async function pickHealthyMirror(): Promise<string> {
+/**
+ * First healthy mirror by priority; falls back to the first listed if all down.
+ * Returns null when there are NO (non-blocklisted) mirrors — callers must not
+ * fall back to the blocklisted canonical.
+ */
+export async function pickHealthyMirror(): Promise<string | null> {
   const origins = await getMirrors();
-  if (origins.length === 0) return "https://stacc.art";
+  if (origins.length === 0) return null;
   const checks = await Promise.all(
     origins.map(async (origin) => ({ origin, ok: await checkMirror(origin) }))
   );

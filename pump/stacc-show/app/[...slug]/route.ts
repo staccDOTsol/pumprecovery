@@ -12,9 +12,13 @@ export const dynamic = "force-dynamic";
  * deep links and ?ref= survive: stacc.show/<mint>?ref=X -> mirror/<mint>?ref=X
  */
 async function redirect(req: NextRequest) {
-  const { pathname, search } = new URL(req.url);
+  const url = new URL(req.url);
   const target = await pickHealthyMirror();
-  const dest = new URL(pathname + search, target).toString();
+  // No live (non-blocklisted) mirror — send to the index so the visitor sees the
+  // list + warning, rather than the blocklisted canonical.
+  const dest = target
+    ? new URL(url.pathname + url.search, target).toString()
+    : new URL("/", url.origin).toString();
   const res = NextResponse.redirect(dest, 302);
   res.headers.set("Cache-Control", "no-store");
   return res;
