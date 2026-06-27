@@ -22,7 +22,10 @@ const SHARED_DEFAULTS = {
   NEXT_PUBLIC_SOLANA_API_URL2:
     "https://mainnet.helius-rpc.com/?api-key=dc8a996c-1c31-4960-b000-c4586d54f4bb",
   NEXT_PUBLIC_ENABLE_ADD_LIQ: "true",
-  NEXT_PUBLIC_OPEN_VENUES_ON_CREATE: "false",
+  // ON: every new coin opens all 3 Orca venues (SOL/USDC/HOUSE) + LP positions
+  // at creation, so per-trade add_liq can rotate across all three from day one.
+  // Resilient (create never fails if this does); creator pays ~0.47 SOL rent.
+  NEXT_PUBLIC_OPEN_VENUES_ON_CREATE: "true",
 };
 
 const env = Object.fromEntries(
