@@ -25,6 +25,7 @@ import {
 } from "@solana/spl-token";
 import {
   ComputeBudgetProgram,
+  Connection,
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
@@ -55,6 +56,7 @@ import {
   sendJitoBundle,
   sendBundleSerial,
   getJitoTipLamports,
+  addLiqLegWouldRevert,
 } from "@/utils/sendTransaction";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { useTokenBalance } from "@/hooks/useTokenBalance";
@@ -70,6 +72,7 @@ import {
   buildCommitIx,
   fetchLpPositions,
   buildAddLiqIx,
+  buildOpenSolLpPosition,
   availableVenues,
   loadBundleLut,
   type Venue,
@@ -105,6 +108,88 @@ function addLiqVenueOrder(venues: Venue[]): Venue[] {
   }
   // rotation-ordered: start at `counter`, then wrap through the rest
   return venues.map((_, i) => venues[(counter + i) % venues.length]);
+}
+
+/**
+ * Pick the optional `add_liq` (LP-forever) leg for the bundle, fully fail-safe:
+ *
+ *  1. Rotate through the venues that have a live position (SOL/USDC/HOUSE). SOL is
+ *     a pure single-sided WSOL deposit (no swap) → always safe, accepted as-is.
+ *  2. USDC/HOUSE first SWAP/BUY their quote; that swap can revert (Orca 0x1787).
+ *     For those we build the FULL candidate bundle and run a `simulateBundle` gate
+ *     (`addLiqLegWouldRevert`) that only vetoes on a real on-chain SWAP revert (not
+ *     a cross-tx-escrow sim artifact) — rotating to the next venue if it'd revert.
+ *  3. If NO venue has a valid position, INIT a fresh in-range SOL position FIRST
+ *     (a separate, trader-signed `open_lp_position` tx confirmed BEFORE the bundle),
+ *     then deposit into it — so "1/3 to LP" still fires for new/drifted coins.
+ *
+ * Returns the add_liq leg tx, or null (caller ships the 3-leg bundle). NEVER throws
+ * into the buy: any failure just yields null.
+ */
+async function buildAddLiqLeg(opts: {
+  connection: Connection;
+  publicKey: PublicKey;
+  walletPubkey: PublicKey;
+  mint: string;
+  burnLamports: BN | number;
+  cuPriceIx: TransactionInstruction;
+  buildTx: (ixs: TransactionInstruction[]) => VersionedTransaction;
+  baseBundle: VersionedTransaction[]; // [txTrade, txBuyBurn, txCommit]
+  signTransaction?: (tx: VersionedTransaction) => Promise<VersionedTransaction>;
+}): Promise<VersionedTransaction | null> {
+  const {
+    connection, publicKey, walletPubkey, mint, burnLamports,
+    cuPriceIx, buildTx, baseBundle, signTransaction,
+  } = opts;
+  const cuLimit = (units: number) =>
+    ComputeBudgetProgram.setComputeUnitLimit({ units });
+
+  try {
+    const positions = await fetchLpPositions(mint);
+    const order = positions ? addLiqVenueOrder(availableVenues(positions)) : [];
+    for (const venue of order) {
+      try {
+        const addLiqIx = await buildAddLiqIx(
+          connection, walletPubkey, positions!, venue, burnLamports
+        );
+        // venue 2 (HOUSE) does a PumpSwap buy + Orca deposit → CU-heavy.
+        const txAddLiq = buildTx([cuPriceIx, cuLimit(venue === 2 ? 600_000 : 400_000), addLiqIx]);
+        if (venue === 0) return txAddLiq; // SOL: no swap, always safe
+        // USDC/HOUSE: gate on a bundle sim that catches a real swap revert.
+        const candidate = [baseBundle[0], txAddLiq, baseBundle[1], baseBundle[2]];
+        const reverts = await addLiqLegWouldRevert(candidate, 1, connection);
+        if (!reverts) return txAddLiq;
+        console.warn(`add_liq venue ${venue} would revert (swap) — rotating`);
+      } catch (e) {
+        console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
+      }
+    }
+
+    // No valid venue → init a fresh SOL position before broadcasting, then deposit.
+    if (process.env.NEXT_PUBLIC_INIT_LP_ON_TRADE === "false" || !signTransaction) {
+      return null;
+    }
+    const opened = await buildOpenSolLpPosition(connection, publicKey, new PublicKey(mint));
+    if (!opened) return null; // no SOL/meme pool — can't open
+    const openTx = buildTx([cuPriceIx, cuLimit(400_000), ...opened.setupIxs]);
+    // Wallet signs the fee-payer/funder slot FIRST, THEN we add the new position
+    // mint's signature (doing it in this order means the wallet adapter can't wipe
+    // the mint signature while re-serializing).
+    const signedOpen = await signTransaction(openTx);
+    signedOpen.sign([opened.positionMint]);
+    const sig = await connection.sendRawTransaction(signedOpen.serialize(), {
+      skipPreflight: true,
+    });
+    await connection.confirmTransaction(sig, "confirmed");
+    console.log("opened fresh SOL LP position pre-bundle", { mint, sig });
+    const addLiqIx = await buildAddLiqIx(
+      connection, walletPubkey, { sol: opened.position }, 0, burnLamports
+    );
+    return buildTx([cuPriceIx, cuLimit(400_000), addLiqIx]);
+  } catch (e) {
+    console.warn("add_liq leg disabled this trade:", (e as Error).message);
+    return null;
+  }
 }
 
 interface TradeProps {
@@ -462,45 +547,32 @@ export default function TradeBox({
 
       // tx1: setup + buy (the tip lives here so the bundle is incentivized).
       const txBuy = buildTx([...instructions, ...setupIxs, buyInstruction]);
+      // tx3: buy & burn $HOUSE leg. tx4: commit — releases withheld tokens; MUST be
+      // last. Built BEFORE add_liq so the add_liq leg can be simulated in the FULL
+      // candidate bundle (the swap venues' revert gate needs buy/burn/commit context).
+      const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
+      const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);
+
       // tx2 (optional, flag-gated): add_liq — single-sided deposit of the escrowed
-      // LP third into a program-owned Orca position on ONE rotating venue
-      // (SOL->USDC->HOUSE round-robin among venues with a registry position).
-      // Gated by NEXT_PUBLIC_ENABLE_ADD_LIQ + registry; building it can NEVER
-      // break the buy: any error falls back to the 3-leg bundle. When active the
-      // bundle is buy -> add_liq(venue) -> burn -> commit.
+      // LP third into a program-owned Orca position on ONE rotating venue. Fully
+      // fail-safe (see buildAddLiqLeg): SOL is accepted as-is; USDC/HOUSE are kept
+      // only if a bundle sim shows no real swap revert; if NO venue is valid it
+      // INITS a fresh SOL position (trader-signed) before broadcasting. Any failure
+      // returns null → the proven 3-leg bundle. NEVER breaks the buy.
       let txAddLiq: VersionedTransaction | null = null;
       if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-        // Try EVERY venue that has a live on-chain position, in rotation order,
-        // and use the FIRST whose single-sided deposit is currently valid (the
-        // others get guard-skipped when price has moved through their range).
-        // Building this can NEVER break the buy — any failure leaves the 3-leg
-        // bundle. (5-tx Jito cap = one venue per trade; rotation fills all 3.)
-        const positions = await fetchLpPositions(coin.mint);
-        const order = positions ? addLiqVenueOrder(availableVenues(positions)) : [];
-        for (const venue of order) {
-          try {
-            const addLiqIx = await buildAddLiqIx(
-              connection,
-              wallet.publicKey,
-              positions!,
-              venue,
-              burnLamports
-            );
-            // venue 2 (HOUSE) does a PumpSwap buy + Orca deposit -> CU-heavy; 600k.
-            const addLiqCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
-              units: venue === 2 ? 600_000 : 400_000,
-            });
-            txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
-            break;
-          } catch (e) {
-            console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
-          }
-        }
+        txAddLiq = await buildAddLiqLeg({
+          connection,
+          publicKey,
+          walletPubkey: wallet.publicKey,
+          mint: coin.mint,
+          burnLamports,
+          cuPriceIx,
+          buildTx,
+          baseBundle: [txBuy, txBuyBurn, txCommit],
+          signTransaction,
+        });
       }
-      // tx3: buy & burn $HOUSE leg.
-      const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
-      // tx4: commit — releases the withheld tokens; MUST be last.
-      const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);
 
       // Jito bundle: same-slot AND IN-ORDER. Order: buy -> [add_liq] -> burn -> commit.
       const bundleTxs = (txAddLiq
@@ -722,38 +794,29 @@ export default function TradeBox({
       const preSell = instructions.slice(0, instructions.length - 1);
       const sellIx = instructions[instructions.length - 1];
       const txSell = buildTx([...preSell, ...setupIxs, sellIx]);
-      // Optional add_liq leg (flag-gated + registry), mirroring buy: sells also
-      // add liquidity (LP-forever applies to both directions), rotating venues
-      // round-robin among those with a registry position. Consumes the LP third
-      // escrowed by `sell`; any build failure falls back to the 3-leg bundle.
-      let txAddLiq: VersionedTransaction | null = null;
-      if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
-        // Try every venue with a live on-chain position, in rotation order, and
-        // use the first whose single-sided deposit is currently valid. Never
-        // breaks the sell — any failure leaves the 3-leg bundle.
-        const positions = await fetchLpPositions(coin.mint);
-        const order = positions ? addLiqVenueOrder(availableVenues(positions)) : [];
-        for (const venue of order) {
-          try {
-            const addLiqIx = await buildAddLiqIx(
-              connection,
-              wallet.publicKey,
-              positions!,
-              venue,
-              burnLamports
-            );
-            const addLiqCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
-              units: venue === 2 ? 600_000 : 400_000,
-            });
-            txAddLiq = buildTx([cuPriceIx, addLiqCuLimitIx, addLiqIx]);
-            break;
-          } catch (e) {
-            console.warn(`add_liq venue ${venue} skipped:`, (e as Error).message);
-          }
-        }
-      }
+      // buy&burn + commit first so the add_liq leg can be simulated in the full
+      // candidate bundle (swap-venue revert gate needs sell/burn/commit context).
       const txBuyBurn = buildTx([cuPriceIx, cuLimitIx, buyBurnIx]);
       const txCommit = buildTx([cuPriceIx, cuLimitIx, commitIx]);
+
+      // Optional add_liq leg (flag-gated + registry), mirroring buy: sells also add
+      // liquidity (LP-forever applies to both directions). Fully fail-safe via
+      // buildAddLiqLeg (SOL as-is; USDC/HOUSE sim-gated; init a fresh SOL position
+      // pre-bundle if none valid). Any failure → the proven 3-leg bundle.
+      let txAddLiq: VersionedTransaction | null = null;
+      if (process.env.NEXT_PUBLIC_ENABLE_ADD_LIQ === "true") {
+        txAddLiq = await buildAddLiqLeg({
+          connection,
+          publicKey,
+          walletPubkey: wallet.publicKey,
+          mint: coin.mint,
+          burnLamports,
+          cuPriceIx,
+          buildTx,
+          baseBundle: [txSell, txBuyBurn, txCommit],
+          signTransaction,
+        });
+      }
 
       // Jito bundle: same-slot AND in-order. sell -> [add_liq] -> burn -> commit.
       const bundleTxs = (txAddLiq

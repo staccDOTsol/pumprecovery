@@ -100,14 +100,40 @@ async function fetchPumpIcoPrice() {
   }
 }
 
+// Complete, safe, EMPTY response shape — so the page (which reads
+// data.totals.grossVolumeSol, only `data` optional-chained) never crashes when
+// neither a local Supabase key NOR the shared backend is available.
+function emptyAirdrop(note: string) {
+  return {
+    generatedAt: new Date().toISOString(),
+    pumpIco: null,
+    note,
+    assumptions: { FEE_BPS, VENUE_RENT_SOL, solUnit: "sol" },
+    totals: { wallets: 0, coins: 0, trades: 0, coinsWithVenues: 0, grossVolumeSol: 0 },
+    wallets: [] as unknown[],
+  };
+}
+
 export async function GET() {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_KEY;
   if (!base || !key) {
-    return Response.json(
-      { error: "SUPABASE_URL / SUPABASE_KEY not configured" },
-      { status: 500 }
-    );
+    // MIRROR PATH (no Supabase secret): proxy to the shared backend, which holds
+    // the key and computes the identical aggregation (StatsService.airdrop). This
+    // is what lets the airdrop page work on every mirror without any secrets.
+    const backend = process.env.NEXT_PUBLIC_CLIENT_API_URL;
+    if (backend) {
+      try {
+        const res = await fetch(`${backend}/stats/airdrop`, { next: { revalidate } });
+        if (res.ok) {
+          const j = await res.json();
+          if (j && Array.isArray(j.wallets) && j.totals) return Response.json(j);
+        }
+      } catch {
+        /* fall through to empty */
+      }
+    }
+    return Response.json(emptyAirdrop("airdrop backend unavailable"));
   }
 
   const venueMints = new Set(Object.keys(lpPositions as Record<string, unknown>));

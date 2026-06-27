@@ -25,4 +25,12 @@ export class StatsController {
   async global() {
     return this.stats.global();
   }
+
+  // Airdrop "proof of spend" leaderboard — served here so mirrors with no Supabase
+  // key still render the airdrop page (heavy full-trades scan; cached 2 min).
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  @Get('airdrop')
+  async airdrop() {
+    return this.stats.airdrop();
+  }
 }

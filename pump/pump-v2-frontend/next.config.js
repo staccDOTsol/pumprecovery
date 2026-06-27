@@ -25,6 +25,16 @@ const SHARED_DEFAULTS = {
   // so the bundle legs (esp. swap-heavy add_liq) fit under the 1232-byte tx cap.
   NEXT_PUBLIC_BUNDLE_LUT: "zkahLXTe1tDUQwm53t1WEFvs8QhNjj19bJg2BhMMGWb",
   NEXT_PUBLIC_ENABLE_ADD_LIQ: "true",
+  // ALL THREE add_liq venues live (SOL + USDC + HOUSE). SOL is a pure single-sided
+  // WSOL deposit (no swap). USDC/HOUSE first swap/buy their quote and are kept only
+  // when a per-trade bundle sim shows no real swap revert (else rotate to SOL) — so
+  // turning them on can't brick a buy. Set to "false" as a kill switch (SOL-only).
+  NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES: "true",
+  // ON: if a coin has NO currently-valid LP position on any venue, the trade flow
+  // opens a fresh in-range SOL position (trader-signed, ~0.06 SOL rent) BEFORE
+  // broadcasting the bundle, so "1/3 to LP" still fires on new/drifted coins. Set
+  // to "false" to disable (then add_liq just skips when no valid position exists).
+  NEXT_PUBLIC_INIT_LP_ON_TRADE: "true",
   // ON: every new coin opens all 3 Orca venues (SOL/USDC/HOUSE) + LP positions
   // at creation, so per-trade add_liq can rotate across all three from day one.
   // Resilient (create never fails if this does); creator pays ~0.47 SOL rent.

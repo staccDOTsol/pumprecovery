@@ -1,14 +1,17 @@
 import {
   AddressLookupTableAccount,
   Connection,
+  Keypair,
   PublicKey,
   SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  SYSVAR_RENT_PUBKEY,
   TransactionInstruction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -522,17 +525,21 @@ export async function fetchLpPositions(mint: string): Promise<LpPositions | null
   }
 }
 
-/** The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`. */
+/**
+ * The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`.
+ *
+ * SOL is a pure single-sided WSOL deposit (no swap) — always safe. USDC + HOUSE
+ * first ACQUIRE their quote (USDC: WSOL->USDC on Orca `swap_v2`; HOUSE: WSOL->HOUSE
+ * on PumpSwap) before depositing. Those swap legs CAN revert (e.g. Orca 0x1787) and
+ * would brick the buy, so the caller MUST simulate the assembled bundle and only
+ * keep a swap venue whose add_liq leg doesn't revert (see `pickAddLiqLeg`). All
+ * three are returned here as candidates; set NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=false
+ * to hard-disable the swap venues (SOL-only) as a kill switch.
+ */
 export function availableVenues(positions: LpPositions): Venue[] {
   const out: Venue[] = [];
-  // SOL = a pure single-sided WSOL deposit (no swap). The USDC + HOUSE venues
-  // first SWAP/BUY (USDC: WSOL->USDC on Orca; HOUSE: WSOL->HOUSE on PumpSwap)
-  // before depositing — and the Orca swap currently reverts the whole bundle
-  // with InvalidTickArraySequence (0x1787) from a malformed swap tick-array
-  // sequence. Gate those OFF by default so add_liq NEVER breaks a buy; flip
-  // NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=true once the swap tick arrays are fixed.
   if (isVenuePosition(positions.sol)) out.push(0);
-  if (process.env.NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES === "true") {
+  if (process.env.NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES !== "false") {
     if (isVenuePosition(positions.usdc)) out.push(1);
     if (isVenuePosition(positions.house)) out.push(2);
   }
@@ -569,10 +576,6 @@ function depositAccounts(p: VenuePosition): Meta[] {
   ];
 }
 
-const tickArrayStart = (tick: number, tickSpacing: number) => {
-  const span = tickSpacing * 88;
-  return Math.floor(tick / span) * span;
-};
 const deriveTickArrayPda = (whirlpool: PublicKey, startIndex: number) =>
   findPda(
     [Buffer.from("tick_array"), whirlpool.toBuffer(), Buffer.from(String(startIndex))],
@@ -614,14 +617,31 @@ async function deriveUsdcSwapAccounts(
   const ownerA = wsolIsA ? lpOwnerWsolAta : lpOwnerUsdcAta;
   const ownerB = wsolIsA ? lpOwnerUsdcAta : lpOwnerWsolAta;
 
-  // 3 swap tick arrays, current first, walking in the swap direction.
+  // 3 swap tick arrays, derived EXACTLY like Orca's SDK `getTickArrayPublicKeys`
+  // (the prior ad-hoc derivation omitted the b->a `shift`, which yields a wrong
+  // tick_array_0 near an array boundary => InvalidTickArraySequence / 0x1787).
+  // Orca: shift = aToB ? 0 : tickSpacing; realIndex = floor((tick+shift)/spacing/88);
+  // arrays walk offset 0, ±1, ±2 (down for a->b, up for b->a).
   const span = tickSpacing * 88;
-  const start0 = tickArrayStart(tickCurrent, tickSpacing);
-  const dir = wsolIsA ? -1 : 1; // a_to_b (price down) walks to LOWER arrays
-  const ta0 = deriveTickArrayPda(USDC_SWAP_POOL, start0);
-  const ta1 = deriveTickArrayPda(USDC_SWAP_POOL, start0 + dir * span);
-  const ta2 = deriveTickArrayPda(USDC_SWAP_POOL, start0 + dir * 2 * span);
+  const aToB = wsolIsA; // WSOL->USDC is a->b iff WSOL is token A
+  const shift = aToB ? 0 : tickSpacing;
+  const realIndex = Math.floor((tickCurrent + shift) / tickSpacing / 88);
+  const dir = aToB ? -1 : 1;
+  const startOf = (off: number) => (realIndex + off) * span;
+  const taStarts = [startOf(0), startOf(dir), startOf(2 * dir)];
+  const [ta0, ta1, ta2] = taStarts.map((s) => deriveTickArrayPda(USDC_SWAP_POOL, s));
   const oracle = findPda([Buffer.from("oracle"), USDC_SWAP_POOL.toBuffer()], ORCA_PROGRAM);
+
+  // The starting array (ta0, containing the current tick) MUST be initialized —
+  // it holds the live liquidity the swap consumes. If it isn't, the swap_v2 CPI
+  // reverts the whole bundle, so throw here to SKIP the USDC venue (caller rotates
+  // to the next venue / 3-leg bundle) instead of bricking the buy.
+  const ta0Info = await connection.getAccountInfo(ta0);
+  if (!ta0Info || !ta0Info.owner.equals(ORCA_PROGRAM)) {
+    throw new Error(
+      `add_liq(usdc): swap tick_array_0 ${ta0.toBase58()} (start ${taStarts[0]}) not initialized; skipping`
+    );
+  }
 
   return [
     meta(TOKEN_PROGRAM_ID, false), meta(TOKEN_PROGRAM_ID, false), meta(MEMO_PROGRAM, false),
@@ -757,4 +777,115 @@ export async function buildAddLiqIx(
     keys: [...structKeys, ...remaining],
     data,
   });
+}
+
+// open_lp_position discriminator = sha256("global:open_lp_position")[0..8].
+const DISC_OPEN_LP_POSITION = Buffer.from([162, 192, 10, 152, 68, 254, 183, 198]);
+const ASSOCIATED_TOKEN_PROGRAM = ASSOCIATED_TOKEN_PROGRAM_ID;
+const tokenProgramForMint = (mint: PublicKey) =>
+  mint.equals(WSOL_MINT) || mint.equals(USDC_MINT) ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
+
+/**
+ * Build a standalone `open_lp_position` ix (+ lp_owner ATA setup) that opens a
+ * FRESH, in-range, program-owned SOL/meme Orca position for `memeMint`, for the
+ * "init the position if none valid before broadcasting" path. The position NFT is
+ * owned by the `lp_owner` PDA (locked forever); `funder` (the trader) pays rent.
+ *
+ * The range is the SAME buffered+wide single-sided WSOL placement the keeper script
+ * uses (near edge 1 tick-array off the live tick so a ~1.76x retrace doesn't kill
+ * it, 4 arrays wide), so the returned `position` is immediately valid for the SOL
+ * `add_liq` deposit in the same bundle.
+ *
+ * Returns null when the SOL/meme whirlpool doesn't exist (can't open — caller just
+ * skips add_liq). This tx must be sent + confirmed BEFORE the bundle so add_liq has
+ * a real position to deposit into; sign it with the trader wallet AND `positionMint`.
+ */
+export async function buildOpenSolLpPosition(
+  connection: Connection,
+  funder: PublicKey,
+  memeMint: PublicKey
+): Promise<{
+  setupIxs: TransactionInstruction[];
+  positionMint: Keypair;
+  position: VenuePosition;
+} | null> {
+  const whirlpool = deriveWhirlpool(WSOL_MINT, memeMint, 64);
+  const info = await connection.getAccountInfo(whirlpool);
+  if (!info || !info.owner.equals(ORCA_PROGRAM) || info.data.length < 245) return null;
+  const d = Buffer.from(info.data);
+  const tickSpacing = d.readUInt16LE(41);
+  const tickCurrent = d.readInt32LE(81);
+  const tokenMintA = new PublicKey(d.subarray(101, 133));
+  const tokenVaultA = new PublicKey(d.subarray(133, 165));
+  const tokenMintB = new PublicKey(d.subarray(181, 213));
+  const tokenVaultB = new PublicKey(d.subarray(213, 245));
+
+  // Buffered + wide single-sided WSOL range (1-array buffer, 4-array width).
+  const span = tickSpacing * 88;
+  const quoteIsA = tokenMintA.equals(WSOL_MINT);
+  let tickLowerIndex: number;
+  let tickUpperIndex: number;
+  if (quoteIsA) {
+    const base = Math.ceil(tickCurrent / tickSpacing) * tickSpacing;
+    tickLowerIndex = base + span;
+    tickUpperIndex = tickLowerIndex + 4 * span;
+  } else {
+    const base = Math.floor(tickCurrent / tickSpacing) * tickSpacing;
+    tickUpperIndex = base - span;
+    tickLowerIndex = tickUpperIndex - 4 * span;
+  }
+  const startLower = Math.floor(tickLowerIndex / span) * span;
+  const startUpper = Math.floor(tickUpperIndex / span) * span;
+  const tickArrayLower = deriveTickArrayPda(whirlpool, startLower);
+  const tickArrayUpper = deriveTickArrayPda(whirlpool, startUpper);
+
+  const lpOwner = findPda([Buffer.from("lp_owner")], PUMP_PROGRAM);
+  const positionMint = Keypair.generate();
+  const position = findPda(
+    [Buffer.from("position"), positionMint.publicKey.toBuffer()],
+    ORCA_PROGRAM
+  );
+  const positionTokenAccount = getAssociatedTokenAddressSync(
+    positionMint.publicKey, lpOwner, true, TOKEN_PROGRAM_ID
+  );
+  const tokenProgramA = tokenProgramForMint(tokenMintA);
+  const tokenProgramB = tokenProgramForMint(tokenMintB);
+  const lpOwnerAtaA = getAssociatedTokenAddressSync(tokenMintA, lpOwner, true, tokenProgramA);
+  const lpOwnerAtaB = getAssociatedTokenAddressSync(tokenMintB, lpOwner, true, tokenProgramB);
+
+  const data = Buffer.concat([
+    DISC_OPEN_LP_POSITION,
+    i32le(tickLowerIndex), i32le(tickUpperIndex),
+    i32le(startLower), i32le(startUpper),
+  ]);
+  const openIx = new TransactionInstruction({
+    programId: PUMP_PROGRAM,
+    keys: [
+      meta(funder, true, true), meta(lpOwner, false), meta(SystemProgram.programId, false),
+      meta(whirlpool, false), meta(position, true), meta(positionMint.publicKey, true, true),
+      meta(positionTokenAccount, true), meta(TOKEN_PROGRAM_ID, false), meta(ASSOCIATED_TOKEN_PROGRAM, false),
+      meta(SYSVAR_RENT_PUBKEY, false), meta(tickArrayLower, true), meta(tickArrayUpper, true),
+      meta(ORCA_PROGRAM, false),
+    ],
+    data,
+  });
+
+  // add_liq pulls/deposits from lp_owner's A/B ATAs — make sure they exist.
+  const setupIxs: TransactionInstruction[] = [
+    createAssociatedTokenAccountIdempotentInstruction(funder, lpOwnerAtaA, lpOwner, tokenMintA, tokenProgramA),
+    createAssociatedTokenAccountIdempotentInstruction(funder, lpOwnerAtaB, lpOwner, tokenMintB, tokenProgramB),
+    openIx,
+  ];
+
+  const venuePosition: VenuePosition = {
+    whirlpool: whirlpool.toBase58(), position: position.toBase58(),
+    positionMint: positionMint.publicKey.toBase58(), positionTokenAccount: positionTokenAccount.toBase58(),
+    tickArrayLower: tickArrayLower.toBase58(), tickArrayUpper: tickArrayUpper.toBase58(),
+    tickLowerIndex, tickUpperIndex,
+    tokenMintA: tokenMintA.toBase58(), tokenMintB: tokenMintB.toBase58(),
+    tokenVaultA: tokenVaultA.toBase58(), tokenVaultB: tokenVaultB.toBase58(),
+    tokenProgramA: tokenProgramA.toBase58(), tokenProgramB: tokenProgramB.toBase58(),
+    tokenOwnerAccountA: lpOwnerAtaA.toBase58(), tokenOwnerAccountB: lpOwnerAtaB.toBase58(),
+  };
+  return { setupIxs, positionMint, position: venuePosition };
 }

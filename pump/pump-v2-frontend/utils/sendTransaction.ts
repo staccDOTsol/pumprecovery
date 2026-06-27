@@ -47,10 +47,32 @@ export const getJitoTipLamports = async (): Promise<number> => {
  * visible. If the RPC doesn't support simulateBundle, it logs and returns
  * (non-blocking) so we don't break trading on infra quirks.
  */
-export const simulateJitoBundle = async (
+/** One failing leg from a `simulateBundle` preflight. */
+export interface BundleSimLeg {
+  index: number;
+  err: any;
+  /** true = the leg actually ran (consumed CUs / emitted logs) and then reverted;
+   *  false = it never executed (a cross-tx-state sim artifact, e.g. our escrow). */
+  executed: boolean;
+  logs: string[];
+}
+export interface BundleSimResult {
+  /** false when the RPC doesn't support simulateBundle or errored (can't gate). */
+  available: boolean;
+  /** ONLY the failing legs (empty = the whole bundle simulated clean). */
+  failingLegs: BundleSimLeg[];
+}
+
+/**
+ * `simulateBundle` preflight that RETURNS structured per-leg results (instead of
+ * just logging). Applies the txs in sequence against a frozen bank with the txs'
+ * real blockhash (replaceRecentBlockhash:false charges fees sequentially like Jito
+ * actually executes; `true` falsely fails tx2+ on the fee-payer balance leg 0 spent).
+ */
+export const simulateJitoBundleDetailed = async (
   txs: VersionedTransaction[],
   connection: Connection
-): Promise<void> => {
+): Promise<BundleSimResult> => {
   const encoded = txs.map((t) => Buffer.from(t.serialize()).toString("base64"));
   let res: any;
   try {
@@ -64,15 +86,9 @@ export const simulateJitoBundle = async (
         params: [
           { encodedTransactions: encoded },
           {
-            // one config slot per tx (null = don't return account snapshots)
             preExecutionAccountsConfigs: encoded.map(() => null),
             postExecutionAccountsConfigs: encoded.map(() => null),
             skipSigVerify: true,
-            // Use the txs' REAL (fresh) blockhash. replaceRecentBlockhash:true
-            // breaks multi-tx bundle sims: tx2+ fail fee-charging against the
-            // fee-payer balance already mutated by tx1 -> false UnbalancedInstruction
-            // (empty logs, 0 units, fee:null). The real blockhash charges fees
-            // sequentially like Jito actually executes.
             replaceRecentBlockhash: false,
           },
         ],
@@ -80,40 +96,107 @@ export const simulateJitoBundle = async (
     }).then((r) => r.json());
   } catch (e) {
     console.warn("simulateBundle infra error (skipping preflight):", e);
-    return;
+    return { available: false, failingLegs: [] };
   }
 
   if (res?.error) {
     console.warn("simulateBundle not available / errored:", res.error);
-    return; // non-blocking: RPC may not support it
+    return { available: false, failingLegs: [] };
   }
 
   const value = res?.result?.value;
   const results = value?.transactionResults || value?.transaction_results || [];
+  const failingLegs: BundleSimLeg[] = [];
+  results.forEach((tr: any, index: number) => {
+    if (!tr?.err) return;
+    const logs: string[] = tr?.logs || [];
+    const units = tr?.unitsConsumed ?? tr?.units_consumed ?? 0;
+    failingLegs.push({ index, err: tr.err, executed: logs.length > 0 || units > 0, logs });
+  });
+  return { available: true, failingLegs };
+};
+
+export const simulateJitoBundle = async (
+  txs: VersionedTransaction[],
+  connection: Connection
+): Promise<void> => {
+  const { available, failingLegs } = await simulateJitoBundleDetailed(txs, connection);
+  if (!available || failingLegs.length === 0) return;
+
   // Label legs by the ACTUAL bundle shape: 3-leg = buy/sell -> burn -> commit;
   // 4-leg (add_liq enabled) = buy/sell -> add_liq -> burn -> commit.
   const labels =
-    results.length >= 4
+    txs.length >= 4
       ? ["buy/sell", "add_liq", "bundle_buy_burn", "commit"]
       : ["buy/sell", "bundle_buy_burn", "commit"];
 
-  // WARN-ONLY (never block). simulateBundle cannot model our cross-tx escrow:
-  // leg 1 (bundle_buy_burn) spends lamports that leg 0 (buy) escrowed into the
-  // guard, but the sim evaluates each leg against a frozen pre-bundle bank, so
-  // it reports a false `UnbalancedInstruction` (with 0 units / no logs = it
-  // never actually executed). bundle_buy_burn is proven to work on mainnet
-  // standalone, so we only LOG failing legs for visibility and proceed.
-  const failIdx = results.findIndex((tr: any) => tr?.err);
-  if (failIdx === -1) return;
-  const failed = results[failIdx];
-  const logs: string[] = failed?.logs || [];
-  const ran = logs.length > 0 || (failed?.unitsConsumed ?? 0) > 0;
+  // WARN-ONLY (never block here). simulateBundle cannot model our cross-tx escrow
+  // (leg N spends lamports leg 0 escrowed into the guard) and reports a false
+  // `UnbalancedInstruction` (0 units / no logs = never executed). bundle_buy_burn
+  // is proven to work on mainnet, so we only LOG. Real add_liq swap reverts are
+  // gated separately in TradeBox via `simulateJitoBundleDetailed`.
+  const f = failingLegs[0];
   console.warn(
-    `simulateBundle: leg ${failIdx} (${labels[failIdx] || failIdx}) reported ${JSON.stringify(
-      failed.err
-    )} — ${ran ? "EXECUTED+failed (inspect logs)" : "did not execute (multi-tx sim artifact)"}; proceeding.`,
-    ran ? "\n" + logs.join("\n") : ""
+    `simulateBundle: leg ${f.index} (${labels[f.index] || f.index}) reported ${JSON.stringify(
+      f.err
+    )} — ${f.executed ? "EXECUTED+failed (inspect logs)" : "did not execute (multi-tx sim artifact)"}; proceeding.`,
+    f.executed ? "\n" + f.logs.join("\n") : ""
   );
+};
+
+/**
+ * Orca whirlpool program id (string) — used to recognize a REAL swap revert in an
+ * add_liq leg's simulation logs (vs a cross-tx-escrow sim artifact, which never
+ * mentions Orca). Mirrors `ORCA_PROGRAM_ID` in constants/venues.
+ */
+const ORCA_WHIRLPOOL_ID = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
+/** Pump AMM (PumpSwap) program — the HOUSE venue's WSOL->HOUSE buy runs here. */
+const PUMP_AMM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+
+/**
+ * Decide whether a candidate bundle's SWAP-venue add_liq leg (at `addLiqIndex`)
+ * must be DROPPED, so the caller rotates to the next venue / SOL instead of
+ * bricking the buy. Only used to gate the USDC/HOUSE venues (SOL has no swap).
+ *
+ * Returns true (DROP) when:
+ *   - simulateBundle is UNAVAILABLE — we can't verify the swap, so be conservative
+ *     and fall back to the no-swap SOL venue (which still adds LP), OR
+ *   - the add_liq leg's sim shows a SUB-CPI itself FAILING: the Orca `swap_v2`/
+ *     deposit (USDC venue, e.g. 0x1787 InvalidTickArraySequence) or the PumpSwap
+ *     WSOL->HOUSE buy (HOUSE venue). We match a sub-program *failing* — NOT its
+ *     mere presence — because a SUCCESSFUL swap/buy also logs that program
+ *     (`...invoke/success`), and the cross-tx-escrow sim artifact fails LATER in
+ *     our OWN program's lamport accounting (after the sub-CPIs already succeeded),
+ *     so neither is mistaken for a real revert.
+ */
+export const addLiqLegWouldRevert = async (
+  txs: VersionedTransaction[],
+  addLiqIndex: number,
+  connection: Connection
+): Promise<boolean> => {
+  const { available, failingLegs } = await simulateJitoBundleDetailed(txs, connection);
+  if (!available) return true; // can't verify the swap/buy -> fall back to SOL
+  const leg = failingLegs.find((l) => l.index === addLiqIndex);
+  if (!leg || !leg.executed) return false; // clean, or a non-executing artifact
+  const errStr = JSON.stringify(leg.err);
+  const logsStr = leg.logs.join("\n");
+  const subCpiFailed =
+    new RegExp(`Program ${ORCA_WHIRLPOOL_ID} failed`).test(logsStr) ||
+    new RegExp(`Program ${PUMP_AMM_ID} failed`).test(logsStr);
+  const realRevert =
+    subCpiFailed ||
+    logsStr.includes("0x1787") ||
+    /InvalidTickArraySequence/i.test(logsStr) ||
+    /Error Code: 6023/i.test(logsStr) ||
+    /Custom.{0,6}6023/.test(errStr);
+  if (realRevert) {
+    console.warn(
+      `add_liq leg ${addLiqIndex} would revert on-chain (swap/buy/deposit):`,
+      errStr,
+      "\n" + logsStr
+    );
+  }
+  return realRevert;
 };
 
 /**
