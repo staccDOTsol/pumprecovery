@@ -163,19 +163,22 @@ async function buildAddLiqLeg(opts: {
     // Use our existing rotation function (which is SSR-safe and moves between the available ones).
     const preferredVenues = [0, 1, 2];
     let order: Venue[] = [];
-    let venueIndices: number[] = [];
+    let venueIndices: (0 | 1 | 2 | -1)[] = [];
     if (positions) {
       // Only include venues that actually have a live position
       const availVenues = availableVenues(positions); // Venue[]
       // Use rotation key for human fairness
       order = addLiqVenueOrder(availVenues); // Venue[]
       // Find out the index (0:SOL, 1:USDC, 2:HOUSE) of each venue in preferredVenues
+      // Must return an object due to type annotation: VenueIdxObj
       venueIndices = order.map((venue) => {
-        if ("sol" in venue) return 0;
-        if ("usdc" in venue) return 1;
-        if ("house" in venue) return 2;
+        if (typeof venue === "object" && venue !== null) {
+          if (Object.prototype.hasOwnProperty.call(venue, "sol")) return 0;
+          if (Object.prototype.hasOwnProperty.call(venue, "usdc")) return 1;
+          if (Object.prototype.hasOwnProperty.call(venue, "house")) return 2;
+        }
         return -1;
-      });
+      }) as (0 | 1 | 2 | -1)[];
     } else {
       order = [];
       venueIndices = [];
@@ -235,7 +238,7 @@ async function buildAddLiqLeg(opts: {
     // Choose which LP to open: Don't always default to SOL! Try in a fair/progressive order.
     // Fallback: rotate between 0/1/2 using same localStorage-based rotation as above,
     // but if not available, just pick a random one:
-    let toOpenVenue: number | null = null;
+    let toOpenVenue: 0 | 1 | 2 | null = null;
     try {
       // Use the rotation key (same as above) to determine which to open next, for fairness
       const counter =
@@ -245,13 +248,13 @@ async function buildAddLiqLeg(opts: {
               10
             ) || 0
           : Math.floor(Math.random() * preferredVenues.length);
-      toOpenVenue = preferredVenues[counter % preferredVenues.length];
+      toOpenVenue = preferredVenues[counter % preferredVenues.length] as 0 | 1 | 2;
     } catch {
       // If window/localStorage fails, pick randomly
       toOpenVenue =
         preferredVenues[
           Math.floor(Math.random() * preferredVenues.length)
-        ];
+        ] as 0 | 1 | 2;
     }
 
     // Try to open the corresponding position
@@ -320,7 +323,7 @@ async function buildAddLiqLeg(opts: {
       { mint, sig }
     );
     // Build add_liq_ix for the newly opened position, respecting the matching venue
-    let addLiqIxVenue;
+    let addLiqIxVenue: { sol?: any; usdc?: any; house?: any };
     if (toOpenVenue === 0) addLiqIxVenue = { sol: opened.position };
     else if (toOpenVenue === 1) addLiqIxVenue = { usdc: opened.position };
     else if (toOpenVenue === 2) addLiqIxVenue = { house: opened.position };
