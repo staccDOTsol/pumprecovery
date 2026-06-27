@@ -27,7 +27,9 @@ export function OrcaPoolStats({ mint }: { mint: string }) {
     let alive = true;
     const load = async () => {
       try {
-        const res = await fetch(`/api/orca-tvl?mint=${mint}`);
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/stats/orca-tvl?mint=${mint}`
+        );
         if (!res.ok) return;
         const j = await res.json();
         if (j.unavailable) {

@@ -28,7 +28,9 @@ export function CoinFlywheel({ mint }: { mint: string }) {
     let alive = true;
     const load = async () => {
       try {
-        const r = await fetch(`/api/coin-flywheel?mint=${mint}`);
+        const r = await fetch(
+          `${process.env.NEXT_PUBLIC_CLIENT_API_URL}/stats/coin-flywheel?mint=${mint}`
+        );
         if (!r.ok) return;
         const j = await r.json();
         if (j.unavailable) {
