@@ -21,6 +21,9 @@ const SHARED_DEFAULTS = {
     "https://mainnet.helius-rpc.com/?api-key=dc8a996c-1c31-4960-b000-c4586d54f4bb",
   NEXT_PUBLIC_SOLANA_API_URL2:
     "https://mainnet.helius-rpc.com/?api-key=dc8a996c-1c31-4960-b000-c4586d54f4bb",
+  // Address Lookup Table holding the ~28 static program/PDA/mint/pool addresses
+  // so the bundle legs (esp. swap-heavy add_liq) fit under the 1232-byte tx cap.
+  NEXT_PUBLIC_BUNDLE_LUT: "zkahLXTe1tDUQwm53t1WEFvs8QhNjj19bJg2BhMMGWb",
   NEXT_PUBLIC_ENABLE_ADD_LIQ: "true",
   // ON: every new coin opens all 3 Orca venues (SOL/USDC/HOUSE) + LP positions
   // at creation, so per-trade add_liq can rotate across all three from day one.

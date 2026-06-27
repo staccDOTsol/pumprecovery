@@ -71,6 +71,7 @@ import {
   fetchLpPositions,
   buildAddLiqIx,
   availableVenues,
+  loadBundleLut,
   type Venue,
 } from "@/lib/buyBurn";
 import { humanizeWalletError, bundleWalletBlockReason } from "@/lib/walletError";
@@ -447,13 +448,16 @@ export default function TradeBox({
       const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
         units: 400_000,
       });
+      // LUT collapses the ~28 static program/PDA/mint/pool addresses to 1-byte
+      // indices so the swap-heavy add_liq legs fit under the 1232-byte tx limit.
+      const lutAccounts = await loadBundleLut(connection);
       const buildTx = (ixs: TransactionInstruction[]) =>
         new VersionedTransaction(
           new TransactionMessage({
             payerKey: publicKey,
             recentBlockhash,
             instructions: ixs,
-          }).compileToV0Message()
+          }).compileToV0Message(lutAccounts)
         );
 
       // tx1: setup + buy (the tip lives here so the bundle is incentivized).
@@ -703,13 +707,14 @@ export default function TradeBox({
       const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
         units: 400_000,
       });
+      const lutAccounts = await loadBundleLut(connection);
       const buildTx = (ixs: TransactionInstruction[]) =>
         new VersionedTransaction(
           new TransactionMessage({
             payerKey: publicKey,
             recentBlockhash,
             instructions: ixs,
-          }).compileToV0Message()
+          }).compileToV0Message(lutAccounts)
         );
 
       // `instructions` = [tip?, cuPrice, createHouseATA, sellInstruction]; the

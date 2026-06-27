@@ -1,4 +1,5 @@
 import {
+  AddressLookupTableAccount,
   Connection,
   PublicKey,
   SystemProgram,
@@ -459,6 +460,27 @@ export function getLpPosition(mint: string): LpPositions | null {
     return out.sol || out.usdc || out.house ? out : null;
   } catch {
     return null;
+  }
+}
+
+// Bundle Address Lookup Table — collapses the ~28 static program/PDA/mint/pool
+// addresses to 1-byte indices so the swap-heavy add_liq legs fit under 1232
+// bytes. Cached client-side (the table is immutable for our purposes).
+let bundleLutCache: { at: number; accts: AddressLookupTableAccount[] } | null = null;
+export async function loadBundleLut(
+  connection: Connection
+): Promise<AddressLookupTableAccount[]> {
+  const addr = process.env.NEXT_PUBLIC_BUNDLE_LUT?.trim();
+  if (!addr) return [];
+  const now = Date.now();
+  if (bundleLutCache && now - bundleLutCache.at < 600_000) return bundleLutCache.accts;
+  try {
+    const res = await connection.getAddressLookupTable(new PublicKey(addr));
+    const accts = res.value ? [res.value] : [];
+    bundleLutCache = { at: now, accts };
+    return accts;
+  } catch {
+    return [];
   }
 }
 
