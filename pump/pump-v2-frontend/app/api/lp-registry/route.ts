@@ -59,21 +59,42 @@ export async function GET() {
     const lpOwner = pda([Buffer.from("lp_owner")], PUMP);
 
     // 1) lp_owner's position NFTs (classic-token, amount 1, decimals 0).
+    //
+    // AUTHORITY CHECK: only positions whose NFT sits in lp_owner's CANONICAL
+    // associated token account are depositable by add_liq — that's the account
+    // it passes to Orca's increase_liquidity as `position_token_account`, and
+    // Orca requires position_authority(lp_owner) == position_token_account.owner
+    // and that it holds the NFT. "Non-standard" positions (NFT minted into a
+    // non-ATA account, or opened by a different flow) make the CPI revert
+    // (Custom 3010 / AccountNotSigner), which breaks the whole buy bundle. We
+    // exclude them here so add_liq only ever fires on positions it can sign for.
     const parsed = await conn.getParsedTokenAccountsByOwner(lpOwner, { programId: TOKEN });
     const positionMints: PublicKey[] = [];
-    for (const { account } of parsed.value) {
+    let skippedNonStandard = 0;
+    for (const { pubkey, account } of parsed.value) {
       const info: any = account.data?.parsed?.info;
       const amt = info?.tokenAmount;
       if (amt && amt.decimals === 0 && amt.amount === "1") {
         try {
-          positionMints.push(new PublicKey(info.mint));
+          const mint = new PublicKey(info.mint);
+          const canonicalAta = ataOf(info.mint, lpOwner, TOKEN);
+          if (pubkey.equals(canonicalAta)) {
+            positionMints.push(mint);
+          } else {
+            skippedNonStandard++;
+          }
         } catch {
           /* skip */
         }
       }
     }
     if (positionMints.length === 0) {
-      return Response.json({ generatedAt: new Date().toISOString(), count: 0, registry: {} });
+      return Response.json({
+        generatedAt: new Date().toISOString(),
+        count: 0,
+        skippedNonStandard,
+        registry: {},
+      });
     }
 
     // 2) Orca position PDAs for each NFT mint → read (whirlpool + tick range).
@@ -110,19 +131,25 @@ export async function GET() {
     const whirlpoolAccts = await getMulti(conn, whirlpools);
     const poolInfo = new Map<
       string,
-      { mintA: string; mintB: string; vaultA: string; vaultB: string; tickSpacing: number }
+      {
+        mintA: string; mintB: string; vaultA: string; vaultB: string;
+        tickSpacing: number; tickCurrent: number;
+      }
     >();
     whirlpoolAccts.forEach((acc, i) => {
       if (!acc) return;
       const d = acc.data;
       poolInfo.set(whirlpools[i].toBase58(), {
         tickSpacing: d.readUInt16LE(41),
+        tickCurrent: d.readInt32LE(81),
         mintA: new PublicKey(d.subarray(101, 133)).toBase58(),
         vaultA: new PublicKey(d.subarray(133, 165)).toBase58(),
         mintB: new PublicKey(d.subarray(181, 213)).toBase58(),
         vaultB: new PublicKey(d.subarray(213, 245)).toBase58(),
       });
     });
+
+    const QUOTE_MINT: Record<string, string> = { sol: WSOL, usdc: USDC, house: HOUSE };
 
     // 4) Reconstruct per-coin/per-venue deposit descriptors.
     const registry: Record<string, Record<string, unknown>> = {};
@@ -145,7 +172,16 @@ export async function GET() {
         continue; // both/neither are quotes — not one of our venues
       }
 
-      const span = pool.tickSpacing * 88;
+      // Single-sided depositability at the CURRENT tick (same rule add_liq's
+      // guard uses): the deposit only mints liquidity when price is on the quote
+      // side of the position's range. With duplicate positions per (coin,venue),
+      // prefer a currently-VALID one so add_liq never picks a dead duplicate.
+      const quoteMint = QUOTE_MINT[venue];
+      const quoteIsA = pool.mintA === quoteMint;
+      const valid = quoteIsA
+        ? pool.tickCurrent < p.tickLowerIndex
+        : pool.tickCurrent >= p.tickUpperIndex;
+
       const entry = {
         whirlpool: p.whirlpool.toBase58(),
         position: p.position.toBase58(),
@@ -163,15 +199,22 @@ export async function GET() {
         tokenProgramB: tokenProgramFor(pool.mintB).toBase58(),
         tokenOwnerAccountA: ataOf(pool.mintA, lpOwner, tokenProgramFor(pool.mintA)).toBase58(),
         tokenOwnerAccountB: ataOf(pool.mintB, lpOwner, tokenProgramFor(pool.mintB)).toBase58(),
+        valid,
       };
-      void span;
-      (registry[memeMint] ??= {})[venue] = entry;
+
+      const bucket = (registry[memeMint] ??= {});
+      const existing = bucket[venue] as { valid?: boolean } | undefined;
+      // First one wins, UNLESS the existing pick is invalid and this one is valid.
+      if (!existing || (existing.valid === false && valid)) {
+        bucket[venue] = entry;
+      }
     }
 
     return Response.json({
       generatedAt: new Date().toISOString(),
       lpOwner: lpOwner.toBase58(),
       count: Object.keys(registry).length,
+      skippedNonStandard,
       registry,
     });
   } catch (e) {
