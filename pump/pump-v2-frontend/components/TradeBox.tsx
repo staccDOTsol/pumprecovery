@@ -153,22 +153,22 @@ async function buildAddLiqLeg(opts: {
     ComputeBudgetProgram.setComputeUnitLimit({ units });
 
   try {
-    // Collect all available venues for this coin from the registry.
-    // We include a venue if a pre-opened position entry exists for it (sol/house/usdc).
-    // The snapshot `valid` flag from registry is ignored here (it can be stale);
-    // the live range check + sim gate inside buildAddLiqIx decides if it can be used
-    // right now. This way we can actually rotate across the three options.
+    // Collect available venues for this coin from the (live) registry.
+    // isVenuePosition + availableVenues only include entries where "valid": true
+    // (or absent for back-compat). This ensures we only ever select among VALID LP
+    // positions. The live tick check inside buildAddLiqIx is an additional runtime
+    // guard.
     const positions = await fetchLpPositions(mint);
 
-    // Build list of registered venues (0/1/2) for this mint.
+    // Build list of *valid* venues (0/1/2) for this mint.
     const avail: Venue[] = positions ? availableVenues(positions) : [];
 
-    // Select EXACTLY ONE at random of the three (sol / usdc / house) that are registered
-    // for this mint. Every button click independently picks a random option so users
-    // actually get variety instead of always wsol.
+    // Select EXACTLY ONE (randomly) of the valid options for this mint.
+    // This guarantees that clicking the button gets a random one of the three
+    // (sol/house/usdc) *that are currently valid* in the registry.
     let chosen: Venue | null = null;
     if (avail.length > 0) {
-      // advance the shared rotation counter as a side-effect (used by init-fallback path)
+      // side-effect bump the rotation counter (keeps init-fallback path fair)
       addLiqVenueOrder(avail);
       const idx = Math.floor(Math.random() * avail.length);
       chosen = avail[idx];

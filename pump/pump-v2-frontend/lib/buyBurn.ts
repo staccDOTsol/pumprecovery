@@ -527,14 +527,16 @@ export async function fetchLpPositions(mint: string): Promise<LpPositions | null
 }
 
 /**
- * The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`.
- * Only positions whose registry entry has `valid: true` (or missing for back-compat)
- * are considered "usable" here. The final decision is still made live inside
- * buildAddLiqIx (current tick vs the position range) + sim gate for swap venues.
+ * The venues (0=SOL,1=USDC,2=HOUSE) that have a *valid* position in `positions`.
+ * isVenuePosition enforces that we only return venues whose registry entry
+ * has "valid": true (or no "valid" key for old data).
  *
- * SOL is a pure single-sided WSOL deposit (no swap) — always safe. USDC + HOUSE
- * first ACQUIRE their quote before depositing. Set NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=false
- * to hard-disable the swap venues (SOL-only) as a kill switch.
+ * The runtime guard in buildAddLiqIx will still re-check the live whirlpool tick
+ * vs the position range before building the ix (and will throw/skip if drifted).
+ *
+ * SOL is pure single-sided WSOL (no swap) — always safe if valid. USDC/HOUSE do
+ * a swap first and are sim-gated. Use NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=false to
+ * force SOL-only.
  */
 export function availableVenues(positions: LpPositions): Venue[] {
   const out: Venue[] = [];
