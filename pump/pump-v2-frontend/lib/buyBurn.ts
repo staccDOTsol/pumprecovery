@@ -437,8 +437,9 @@ const VENUE_KEY: Record<Venue, keyof LpPositions> = { 0: "sol", 1: "usdc", 2: "h
 const isVenuePosition = (e: unknown): e is VenuePosition =>
   !!e &&
   typeof e === "object" &&
-  typeof (e as VenuePosition).whirlpool === "string" &&
-  typeof (e as VenuePosition).position === "string";
+  typeof (e as any).whirlpool === "string" &&
+  typeof (e as any).position === "string" &&
+  ((e as any).valid === undefined || (e as any).valid === true);
 
 /**
  * Defensive registry lookup. Returns the per-venue shape (`{ sol?, usdc?, house? }`)
@@ -527,13 +528,12 @@ export async function fetchLpPositions(mint: string): Promise<LpPositions | null
 
 /**
  * The venues (0=SOL,1=USDC,2=HOUSE) that have a usable position in `positions`.
+ * Only positions whose registry entry has `valid: true` (or missing for back-compat)
+ * are considered "usable" here. The final decision is still made live inside
+ * buildAddLiqIx (current tick vs the position range) + sim gate for swap venues.
  *
  * SOL is a pure single-sided WSOL deposit (no swap) — always safe. USDC + HOUSE
- * first ACQUIRE their quote (USDC: WSOL->USDC on Orca `swap_v2`; HOUSE: WSOL->HOUSE
- * on PumpSwap) before depositing. Those swap legs CAN revert (e.g. Orca 0x1787) and
- * would brick the buy, so the caller MUST simulate the assembled bundle and only
- * keep a swap venue whose add_liq leg doesn't revert (see `pickAddLiqLeg`). All
- * three are returned here as candidates; set NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=false
+ * first ACQUIRE their quote before depositing. Set NEXT_PUBLIC_ADD_LIQ_SWAP_VENUES=false
  * to hard-disable the swap venues (SOL-only) as a kill switch.
  */
 export function availableVenues(positions: LpPositions): Venue[] {

@@ -113,25 +113,18 @@ function addLiqVenueOrder(venues: Venue[]): Venue[] {
 }
 
 /**
- * Pick the optional `add_liq` (LP-forever) leg for the bundle, fully fail-safe:
+ * Pick the optional `add_liq` (LP-forever) leg for the bundle, fully fail-safe.
  *
- *  1. Rotate through the venues that have a live position (SOL/USDC/HOUSE). SOL is
- *     a pure single-sided WSOL deposit (no swap) → always safe, accepted as-is.
- *  2. USDC/HOUSE first SWAP/BUY their quote; that swap can revert (Orca 0x1787).
- *     For those we build the FULL candidate bundle and run a `simulateBundle` gate
- *     (`addLiqLegWouldRevert`) that only vetoes on a real on-chain SWAP revert (not
- *     a cross-tx-escrow sim artifact) — rotating to the next venue if it'd revert.
- *  3. If NO venue has a valid position, INIT a fresh in-range SOL position FIRST
- *     (a separate, trader-signed `open_lp_position` tx confirmed BEFORE the bundle),
- *     then deposit into it — so "1/3 to LP" still fires for new/drifted coins.
+ * Selects ONE venue out of the three (SOL/USDC/HOUSE) using round-robin/sequence rotation
+ * among those present in the live registry with valid=true.
+ *  - SOL (0): pure single-sided WSOL deposit into its position → always accepted.
+ *  - USDC/HOUSE: the leg does a quote swap first; we simulate the full bundle and only
+ *    keep the leg if the sim shows no real on-chain revert from the swap sub-CPI.
+ *  - If NO *valid* venue for the mint, we INIT a fresh in-range position on one of the
+ *    three (rotated) before the bundle — so 1/3-to-LP still works.
  *
  * Returns the add_liq leg tx, or null (caller ships the 3-leg bundle). NEVER throws
  * into the buy: any failure just yields null.
- */
-/**
- * Try to build an add_liq leg using ANY available position (SOL/USDC/HOUSE), in a pseudo-random/
- * round-robin order. DO NOT give up if the "default" fails: try all, and, if no venues exist,
- * open a fresh position for one of the three before giving up. Never auto-default to WSOL only.
  */
 
 async function buildAddLiqLeg(opts: {
@@ -160,57 +153,47 @@ async function buildAddLiqLeg(opts: {
     ComputeBudgetProgram.setComputeUnitLimit({ units });
 
   try {
-    // Collect all available venues for this coin
+    // Collect all available venues for this coin from the registry.
+    // We include a venue if a pre-opened position entry exists for it (sol/house/usdc).
+    // The snapshot `valid` flag from registry is ignored here (it can be stale);
+    // the live range check + sim gate inside buildAddLiqIx decides if it can be used
+    // right now. This way we can actually rotate across the three options.
     const positions = await fetchLpPositions(mint);
-    // We want: 0 = SOL, 1 = USDC, 2 = HOUSE (ICO token). Try all, in rotating/random order.
-    // Use our existing rotation function (which is SSR-safe and moves between the available ones).
-    const preferredVenues = [0, 1, 2];
-    let order: Venue[] = [];
-    let venueIndices: (0 | 1 | 2 | -1)[] = [];
-    if (positions) {
-      // Only include venues that actually have a live position
-      const availVenues = availableVenues(positions); // Venue[]
-      // Use rotation key for human fairness
-      order = addLiqVenueOrder(availVenues); // Venue[]
-      // Find out the index (0:SOL, 1:USDC, 2:HOUSE) of each venue in preferredVenues
-      // Must return an object due to type annotation: VenueIdxObj
-      venueIndices = order.map((venue) => {
-        if (typeof venue === "object" && venue !== null) {
-          if (Object.prototype.hasOwnProperty.call(venue, "sol")) return 0;
-          if (Object.prototype.hasOwnProperty.call(venue, "usdc")) return 1;
-          if (Object.prototype.hasOwnProperty.call(venue, "house")) return 2;
-        }
-        return -1;
-      }) as (0 | 1 | 2 | -1)[];
-    } else {
-      order = [];
-      venueIndices = [];
+
+    // Build list of registered venues (0/1/2) for this mint.
+    const avail: Venue[] = positions ? availableVenues(positions) : [];
+
+    // Select EXACTLY ONE at random of the three (sol / usdc / house) that are registered
+    // for this mint. Every button click independently picks a random option so users
+    // actually get variety instead of always wsol.
+    let chosen: Venue | null = null;
+    if (avail.length > 0) {
+      // advance the shared rotation counter as a side-effect (used by init-fallback path)
+      addLiqVenueOrder(avail);
+      const idx = Math.floor(Math.random() * avail.length);
+      chosen = avail[idx];
     }
 
-    // Try every available venue (SOL, USDC, HOUSE) that actually has a position
-    for (let i = 0; i < order.length; ++i) {
-      const venue = order[i];
-      const venueIndex = venueIndices[i];
+    if (chosen !== null && positions) {
       try {
         const addLiqIx = await buildAddLiqIx(
           connection,
           walletPubkey,
-          positions!,
-          venue,
+          positions,
+          chosen,
           burnLamports
         );
         // Higher compute for HOUSE (2).
         const txAddLiq = buildTx([
           cuPriceIx,
-          cuLimit(venueIndex === 2 ? 600_000 : 400_000),
+          cuLimit(chosen === 2 ? 600_000 : 400_000),
           addLiqIx,
         ]);
-        // For USDC/HOUSE, simulate bundle (guard swap revert); for SOL, always accepted
-        if (venueIndex === 0) {
-          // SOL, always safe, just take it
+        // SOL is pure WSOL single-sided, always safe (if range check passed inside build).
+        if (chosen === 0) {
           return txAddLiq;
         }
-        // USDC/HOUSE: simulate the add_liq leg in-bundle to catch swap reverts
+        // For USDC/HOUSE do the bundle sim gate to protect against swap reverts.
         const candidate = [
           baseBundle[0],
           txAddLiq,
@@ -219,96 +202,58 @@ async function buildAddLiqLeg(opts: {
         ];
         const reverts = await addLiqLegWouldRevert(candidate, 1, connection);
         if (!reverts) return txAddLiq;
-        console.warn(
-          `add_liq venue ${venueIndex} would revert (swap) — rotating`
-        );
+        console.warn(`add_liq chosen venue ${chosen} would revert (swap) — skipping leg`);
+        return null;
       } catch (e) {
-        console.warn(
-          `add_liq venue ${venueIndices[i]} skipped:`,
-          (e as Error).message
-        );
+        console.warn(`add_liq chosen venue ${chosen} skipped:`, (e as Error).message);
+        return null;
       }
     }
 
-    // If there are NO existing positions (user is too early, or all drifted/closed):
-    // Pick a random/preferred of the allowed venues and OPEN it for them before trading!
+    // If there are NO existing positions at all for this mint: INIT a fresh position
+    // on ONE of the three (via rotation) so that add_liq can still happen.
     if (
       process.env.NEXT_PUBLIC_INIT_LP_ON_TRADE === "false" ||
       !signTransaction
     ) {
       return null;
     }
-    // Choose which LP to open: Don't always default to SOL! Try in a fair/progressive order.
-    // Fallback: rotate between 0/1/2 using same localStorage-based rotation as above,
-    // but if not available, just pick a random one:
-    let toOpenVenue: 0 | 1 | 2 | null = null;
+
+    const preferredVenues: (0 | 1 | 2)[] = [0, 1, 2];
+    // Build a rotated try-order over the three options for the init (sequence via counter)
+    let tryOrder: (0 | 1 | 2)[] = [...preferredVenues];
     try {
-      // Use the rotation key (same as above) to determine which to open next, for fairness
-      const counter =
-        typeof window !== "undefined"
-          ? parseInt(
-              window.localStorage.getItem("addLiqVenueRotation") || "0",
-              10
-            ) || 0
-          : Math.floor(Math.random() * preferredVenues.length);
-      toOpenVenue = preferredVenues[counter % preferredVenues.length] as 0 | 1 | 2;
+      tryOrder = addLiqVenueOrder(preferredVenues as Venue[]) as (0 | 1 | 2)[];
+      if (!tryOrder || tryOrder.length === 0) {
+        tryOrder = [...preferredVenues];
+      }
     } catch {
-      // If window/localStorage fails, pick randomly
-      toOpenVenue =
-        preferredVenues[
-          Math.floor(Math.random() * preferredVenues.length)
-        ] as 0 | 1 | 2;
+      tryOrder = [...preferredVenues];
     }
 
-    // Try to open the corresponding position
     let opened: any = null;
-    if (toOpenVenue === 0) {
-      // Open fresh SOL LP
-      opened = await buildOpenSolLpPosition(
-        connection,
-        publicKey,
-        new PublicKey(mint)
-      );
-      if (!opened) {
-        console.warn("No SOL pool, can't open any position");
-        return null;
+    let toOpenVenue: 0 | 1 | 2 | null = null;
+    for (const v of tryOrder) {
+      if (v === 0) {
+        opened = await buildOpenSolLpPosition(connection, publicKey, new PublicKey(mint));
+      } else if (v === 1) {
+        if (typeof buildOpenUsdcLpPosition === "function") {
+          opened = await buildOpenUsdcLpPosition(connection, publicKey, new PublicKey(mint));
+        }
+      } else if (v === 2) {
+        if (typeof buildOpenHouseLpPosition === "function") {
+          opened = await buildOpenHouseLpPosition(connection, publicKey, new PublicKey(mint));
+        }
       }
-    } else if (toOpenVenue === 1) {
-      // Open fresh USDC LP (you need to implement buildOpenUsdcLpPosition)
-      if (typeof buildOpenUsdcLpPosition !== "function") {
-        console.warn(
-          "USDC LP open fn missing (implement buildOpenUsdcLpPosition)"
-        );
-        return null;
-      }
-      opened = await buildOpenUsdcLpPosition(
-        connection,
-        publicKey,
-        new PublicKey(mint)
-      );
-      if (!opened) {
-        console.warn("No USDC pool, can't open");
-        return null;
-      }
-    } else if (toOpenVenue === 2) {
-      // Open fresh HOUSE/ICO LP (you need to implement buildOpenHouseLpPosition)
-      if (typeof buildOpenHouseLpPosition !== "function") {
-        console.warn(
-          "HOUSE LP open fn missing (implement buildOpenHouseLpPosition)"
-        );
-        return null;
-      }
-      opened = await buildOpenHouseLpPosition(
-        connection,
-        publicKey,
-        new PublicKey(mint)
-      );
-      if (!opened) {
-        console.warn("No HOUSE pool, can't open");
-        return null;
+      if (opened) {
+        toOpenVenue = v;
+        break;
       }
     }
-    if (!opened) return null;
+    if (!opened || toOpenVenue === null) {
+      console.warn("No whirlpool exists yet for any venue — skipping add_liq leg");
+      return null;
+    }
     const openTx = buildTx([
       cuPriceIx,
       cuLimit(400_000),
